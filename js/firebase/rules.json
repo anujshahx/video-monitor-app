@@ -1,0 +1,34 @@
+{
+  "rules": {
+    "rooms": {
+      "$room": {
+        ".read": "auth == null && root.child('rooms').child($room).exists()",
+        ".write": "auth == null",
+        "createdAt": {
+          ".validate": "newData.isNumber()"
+        },
+        "status": {
+          ".validate": "newData.val() === 'waiting' || newData.val() === 'connected' || newData.val() === 'closed'"
+        },
+        "offer": {
+          ".validate": "newData.hasChildren(['sdp','type']) && newData.child('type').val() === 'offer' && newData.child('sdp').isString()"
+        },
+        "answer": {
+          ".validate": "newData.hasChildren(['sdp','type']) && newData.child('type').val() === 'answer' && newData.child('sdp').isString()"
+        },
+        "ice": {
+          "camera": {
+            "$id": {
+              ".validate": "newData.hasChildren(['candidate','sdpMid','sdpMLineIndex']) && newData.child('candidate').isString()"
+            }
+          },
+          "monitor": {
+            "$id": {
+              ".validate": "newData.hasChildren(['candidate','sdpMid','sdpMLineIndex']) && newData.child('candidate').isString()"
+            }
+          }
+        }
+      }
+    }
+  }
+}
