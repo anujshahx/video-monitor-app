@@ -1,30 +1,26 @@
 # BabyMonitor Web (GitHub Pages)
 
-A lightweight, production-oriented WebRTC baby monitor web app.
+A lightweight, cross-device baby monitor web app using WebRTC + Firebase Realtime Database signaling.
 
-## What you must configure (placeholders)
+## Where to add Firebase config
+Edit: `js/firebase/config.js` and replace the placeholder values with your Firebase Web App config.
 
-### 1) Firebase Realtime Database
-Edit:
-- `js/firebase/config.js`
+## Firebase Realtime Database Rules
+Upload: `js/firebase/rules.json` in Firebase Console → Realtime Database → Rules.
 
-Replace the placeholder values with your Firebase web app config.
-Also enable Realtime Database and set rules from:
-- `js/firebase/rules.json`
+## Optional TURN
+Edit: `js/webrtc/turn.js`
+- set `enabled: true`
+- fill `urls`, `username`, `credential`
 
-### 2) TURN (Optional)
-Edit:
-- `js/webrtc/turn.js`
-Set `enabled: true` and provide `urls`, `username`, `credential`.
+## Run locally
+Because this uses ES modules, run a local server:
 
-> TURN requires a real TURN provider (e.g., coturn on a server, Twilio/Nimble/other).
-> GitHub Pages hosting is fine because TURN config is client-side.
+```bash
+python3 -m http.server 8080
+```
 
-## Deploy on GitHub Pages
-1. Push this repo to GitHub
-2. Repo Settings → Pages → Deploy from branch (root)
-3. Open your Pages URL
+Open http://localhost:8080
 
-## Notes
-- Lens switching is best-effort across browsers. Zoom support depends on device capabilities.
-- Motion detection runs on the Camera device and signals motion events over WebRTC DataChannel.
+## Deploy to GitHub Pages
+Push to GitHub, then Settings → Pages → deploy from branch (root).

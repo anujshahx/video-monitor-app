@@ -1,19 +1,23 @@
+
 import { state } from '../state.js';
 import { el, toast } from '../utils/dom.js';
 import { formatElapsed } from '../utils/timers.js';
 import { createPeer } from '../webrtc/peer.js';
-import { attachControlChannel } from '../webrtc/dataChannel.js';
 import { listenForOffer, sendAnswer, addIceCandidate, listenIceCandidates, setStatus } from '../webrtc/signaling.js';
 import { attachAudioMeter } from '../media/audioLevel.js';
 
-import { playWhiteNoise, playRain, playLullaby, stopSound } from '../media/sounds.js';
-
-function connectionQuality(peer) {
-  // Best-effort: uses ICE connection state
+function connBadge(peer){
   const s = peer.iceConnectionState;
   if (s === 'connected' || s === 'completed') return { label:'Good', cls:'ok' };
   if (s === 'checking' || s === 'new') return { label:'Connecting', cls:'warn' };
   return { label:'Poor', cls:'bad' };
+}
+
+function dcSend(msg) {
+  const ch = state.dataChannel;
+  if (!ch || ch.readyState !== 'open') return false;
+  ch.send(JSON.stringify(msg));
+  return true;
 }
 
 export async function renderMonitorLive(app) {
@@ -31,32 +35,50 @@ export async function renderMonitorLive(app) {
 
     <div class="videoWrap">
       <video id="remote" autoplay playsinline></video>
-      <div class="overlayToast"><div class="toast">…</div></div>
+      <div class="toast"> </div>
+
+      <!-- overlay controls like baby monitor apps -->
+      <div class="overlayBar">
+        <div class="pillStack">
+          <button class="pill" id="ptt" title="Push to talk (prototype)">🎙️</button>
+          <button class="pill" id="motionToggle" title="Motion alerts">👀</button>
+        </div>
+        <div class="pillStack">
+          <div class="pill small" id="quality">Quality: Auto</div>
+        </div>
+      </div>
     </div>
 
     <div class="controls">
-      <div class="col" style="gap:10px;">
-        <div>
-          <div class="small">Incoming audio</div>
-          <div class="meter"><div id="audBar"></div></div>
+      <div class="card" style="padding:12px;">
+        <div class="row" style="justify-content:space-between;align-items:flex-end;">
+          <div style="flex:1;">
+            <div class="small">Incoming audio</div>
+            <div class="meter" style="margin-top:6px;"><div id="audBar"></div></div>
+          </div>
+          <button class="btn small ghost" id="end">End</button>
         </div>
+
+        <div style="height:12px"></div>
 
         <div class="controlsGrid">
-          <button class="btn" id="motionToggle">Motion Alerts: ON</button>
-          <button class="btn" id="flip">Switch Camera</button>
-
           <button class="btn" id="white">White Noise</button>
           <button class="btn" id="rain">Rain</button>
-
           <button class="btn" id="lullaby">Lullaby</button>
-          <button class="btn danger" id="stop">Stop Sound</button>
+          <button class="btn danger" id="stop">Stop</button>
         </div>
 
-        <div class="row">
-          <button class="btn ghost grow" id="back">End</button>
-        </div>
+        <div style="height:12px"></div>
 
-        <div class="small">Lens switching is best-effort across browsers. Zoom supported on some devices only.</div>
+        <div class="row" style="justify-content:space-between; align-items:center;">
+          <div class="small">Camera selection</div>
+          <button class="btn small ghost" id="refreshCams">Refresh</button>
+        </div>
+        <div style="height:8px"></div>
+        <div id="cams" class="col"></div>
+
+        <div style="height:10px"></div>
+        <div class="small">If video is patchy, tap “Quality: Auto” to downscale.</div>
       </div>
     </div>
   `;
@@ -66,45 +88,50 @@ export async function renderMonitorLive(app) {
   const timerEl = page.querySelector('#timer');
   const remoteVideo = page.querySelector('#remote');
   const audBar = page.querySelector('#audBar');
+  const camsEl = page.querySelector('#cams');
+  const qualityEl = page.querySelector('#quality');
 
   const peer = createPeer();
   state.peer = peer;
 
-  state.remoteStream = new MediaStream();
-  remoteVideo.srcObject = state.remoteStream;
+  const remoteStream = new MediaStream();
+  remoteVideo.srcObject = remoteStream;
 
   peer.ontrack = (ev) => {
-    ev.streams[0].getTracks().forEach(t => state.remoteStream.addTrack(t));
+    ev.streams[0].getTracks().forEach(t => remoteStream.addTrack(t));
   };
 
-  // Data channel from camera
-  attachControlChannel(peer, async (msg) => {
-    if (msg.type === 'motion') {
-      if (state.motionAlertsEnabled) {
-        toast(page, 'Motion detected');
-        // tiny beep using AudioContext (no external file)
-        try {
-          const AudioCtx = window.AudioContext || window.webkitAudioContext;
-          const ctx = new AudioCtx();
-          const o = ctx.createOscillator();
-          const g = ctx.createGain();
-          o.type = 'sine';
-          o.frequency.value = 880;
-          g.gain.value = 0.04;
-          o.connect(g).connect(ctx.destination);
-          o.start();
-          o.stop(ctx.currentTime + 0.12);
-          setTimeout(()=>ctx.close(), 250);
-        } catch {}
-      }
-    }
-  });
+  // When camera creates datachannel, we attach and keep ref
+  peer.ondatachannel = (ev) => {
+    state.dataChannel = ev.channel;
+    state.dataChannel.onmessage = (e) => {
+      try { handleMsg(JSON.parse(e.data)); } catch {}
+    };
+    state.dataChannel.onopen = () => {
+      toast(page, 'Controls ready');
+      requestCameras();
+    };
+  };
 
+  function handleMsg(msg){
+    if (msg.type === 'motion') {
+      if (state.motionAlertsEnabled) toast(page, 'Motion detected');
+    }
+    if (msg.type === 'cameras_list') {
+      renderCameraList(msg.cameras || []);
+    }
+  }
+
+  // ICE handling
   peer.onicecandidate = (ev) => {
     if (ev.candidate) addIceCandidate(state.roomCode, 'monitor', ev.candidate.toJSON());
   };
 
-  // Signaling: wait for offer, then answer
+  listenIceCandidates(state.roomCode, 'camera', async (cand) => {
+    try { await peer.addIceCandidate(cand); } catch {}
+  });
+
+  // Signaling: wait for offer then answer
   let offered = false;
   listenForOffer(state.roomCode, async (offer) => {
     if (offered) return;
@@ -122,71 +149,127 @@ export async function renderMonitorLive(app) {
     }
   });
 
-  // Listen ICE from camera
-  listenIceCandidates(state.roomCode, 'camera', async (cand) => {
-    try { await peer.addIceCandidate(cand); } catch {}
-  });
-
-  // Update connection badge + timer
-  const tick = setInterval(() => {
-    const q = connectionQuality(peer);
-    connEl.textContent = q.label;
-    connEl.className = `badge ${q.cls}`;
+  // UI updates
+  setInterval(() => {
+    const b = connBadge(peer);
+    connEl.textContent = b.label;
+    connEl.className = 'badge ' + b.cls;
     if (state.connectionStartTime) timerEl.textContent = formatElapsed(Date.now() - state.connectionStartTime);
-  }, 500);
-
-  // Audio meter once audio track present
-  let detachMeter = null;
-  const meterWatch = setInterval(() => {
-    const audioTracks = state.remoteStream.getAudioTracks();
-    if (audioTracks.length && !detachMeter) {
-      detachMeter = attachAudioMeter(state.remoteStream, (level) => {
-        audBar.style.width = `${Math.round(level*100)}%`;
-      });
-    }
   }, 400);
 
-  // Controls
+
+  // Best-effort network adaptation (monitor side): if packet loss/jitter high, request downscale
+  let lastHintAt = 0;
+  setInterval(async () => {
+    try {
+      if (!peer || peer.connectionState !== 'connected') return;
+      const stats = await peer.getStats();
+      let inbound;
+      stats.forEach(r => {
+        if (r.type === 'inbound-rtp' && r.kind === 'video') inbound = r;
+      });
+      if (!inbound) return;
+
+      const now = Date.now();
+      const packetsLost = inbound.packetsLost ?? 0;
+      const packetsReceived = inbound.packetsReceived ?? 0;
+      const lossPct = packetsReceived ? (packetsLost / (packetsReceived + packetsLost)) : 0;
+      const jitter = inbound.jitter ?? 0;
+
+      // If loss > 4% or jitter high, request downscale once every 12s
+      if ((lossPct > 0.04 || jitter > 0.05) && (now - lastHintAt) > 12000) {
+        lastHintAt = now;
+        dcSend({ type:'quality_hint', maxBitrate: 650000, scaleDownBy: 1.7 });
+        toast(page, 'Network weak: downscaling');
+      }
+    } catch {}
+  }, 4000);
+
+  // Audio meter (monitor side)
+  const meterStop = attachAudioMeter(remoteStream, (pct) => {
+    audBar.style.width = Math.round(pct*100) + '%';
+  });
+
+  // Motion toggle
   const motionBtn = page.querySelector('#motionToggle');
+  function syncMotionLabel(){
+    motionBtn.textContent = state.motionAlertsEnabled ? '👀' : '🙈';
+  }
+  syncMotionLabel();
   motionBtn.onclick = () => {
     state.motionAlertsEnabled = !state.motionAlertsEnabled;
-    motionBtn.textContent = `Motion Alerts: ${state.motionAlertsEnabled ? 'ON' : 'OFF'}`;
-    toast(page, state.motionAlertsEnabled ? 'Motion alerts enabled' : 'Motion alerts disabled');
+    syncMotionLabel();
+    toast(page, state.motionAlertsEnabled ? 'Motion alerts on' : 'Motion alerts off');
   };
 
-  // Sound playback on Monitor device (local)
-  page.querySelector('#white').onclick = () => playWhiteNoise().catch(()=>toast(page,'Audio blocked until interaction'));
-  page.querySelector('#rain').onclick = () => playRain().catch(()=>toast(page,'Audio blocked until interaction'));
-  page.querySelector('#lullaby').onclick = () => playLullaby().catch(()=>toast(page,'Audio blocked until interaction'));
-  page.querySelector('#stop').onclick = () => { stopSound(); toast(page,'Stopped'); };
+  // Sound controls: send to camera
+  page.querySelector('#white').onclick = () => {
+    if (!dcSend({ type:'sound', action:'white' })) toast(page, 'Controls not ready');
+  };
+  page.querySelector('#rain').onclick = () => {
+    if (!dcSend({ type:'sound', action:'rain' })) toast(page, 'Controls not ready');
+  };
+  page.querySelector('#lullaby').onclick = () => {
+    if (!dcSend({ type:'sound', action:'lullaby' })) toast(page, 'Controls not ready');
+  };
+  page.querySelector('#stop').onclick = () => {
+    if (!dcSend({ type:'sound', action:'stop' })) toast(page, 'Controls not ready');
+  };
 
-  // Best-effort: request camera switch by asking camera page to switch locally (not implemented as command here)
-  // We can only switch camera on camera device via user gesture due to permission restrictions in many browsers.
-  page.querySelector('#flip').onclick = () => {
-    if (state.dataChannel?.readyState === 'open') {
-      state.dataChannel.send(JSON.stringify({ type: 'camera_cmd', action: 'flip' }));
-      toast(page, 'Requested camera switch');
+  // Quality toggle (dynamic downscale request)
+  let qualityMode = 0; // 0 auto, 1 balanced, 2 low
+  const qualityModes = [
+    { label:'Quality: Auto', hint:null },
+    { label:'Quality: Balanced', hint:{ maxBitrate: 900_000, scaleDownBy: 1.3 } },
+    { label:'Quality: Low', hint:{ maxBitrate: 550_000, scaleDownBy: 1.8 } }
+  ];
+  function syncQuality(){
+    qualityEl.textContent = qualityModes[qualityMode].label;
+  }
+  syncQuality();
+  qualityEl.onclick = () => {
+    qualityMode = (qualityMode + 1) % qualityModes.length;
+    syncQuality();
+    const hint = qualityModes[qualityMode].hint;
+    if (hint) {
+      if (!dcSend({ type:'quality_hint', ...hint })) toast(page, 'Controls not ready');
+      else toast(page, 'Requested downscale');
     } else {
-      toast(page, 'Control channel not available');
+      toast(page, 'Auto mode');
     }
   };
 
-  function end() {
-    clearInterval(tick);
-    clearInterval(meterWatch);
-    detachMeter?.();
-    try { peer.close(); } catch {}
-    try { state.remoteStream?.getTracks().forEach(t=>t.stop()); } catch {}
-    stopSound();
-    location.hash = '#/';
+  // Camera list request & selection
+  function requestCameras(){
+    dcSend({ type:'request_cameras' });
   }
 
-  page.querySelector('#back').onclick = end;
+  function renderCameraList(cameras){
+    camsEl.innerHTML = '';
+    if (!cameras.length) {
+      camsEl.innerHTML = '<div class="small">No camera list available yet. Try Refresh.</div>';
+      return;
+    }
+    cameras.forEach((c) => {
+      const b = document.createElement('button');
+      b.className = 'btn ghost small';
+      b.textContent = c.label;
+      b.onclick = () => {
+        if (!dcSend({ type:'select_camera', deviceId: c.id })) toast(page, 'Controls not ready');
+        else toast(page, 'Switching camera…');
+      };
+      camsEl.appendChild(b);
+    });
+  }
 
-  window.addEventListener('beforeunload', () => {
-    clearInterval(tick);
-    clearInterval(meterWatch);
-    detachMeter?.();
+  page.querySelector('#refreshCams').onclick = () => {
+    if (!dcSend({ type:'request_cameras' })) toast(page, 'Controls not ready');
+  };
+
+  // End
+  page.querySelector('#end').onclick = () => {
+    try { meterStop?.(); } catch {}
     try { peer.close(); } catch {}
-  }, { once: true });
+    location.hash = '#/';
+  };
 }

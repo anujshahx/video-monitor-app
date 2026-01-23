@@ -1,12 +1,5 @@
-/* Disable scroll & create an app-like full-screen experience */
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body {
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: #0b0f14;
-  color: #e8eef6;
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-}
-#app { width: 100vw; height: 100vh; overflow: hidden; }
-button, input { font: inherit; }
+
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden}
+body{overscroll-behavior:none;-webkit-overflow-scrolling:touch}
+#app{width:100vw;height:100vh;overflow:hidden}

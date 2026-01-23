@@ -1,11 +1,24 @@
-// WebRTC Peer wrapper with optional TURN support
-// 🔴 PLACEHOLDER: If you add TURN, edit TURN_CONFIG in js/webrtc/turn.js
-import { TURN_CONFIG, buildIceServers } from './turn.js';
+
+import { buildIceServers } from './turn.js';
 
 export function createPeer() {
-  const iceServers = buildIceServers();
   return new RTCPeerConnection({
-    iceServers,
+    iceServers: buildIceServers(),
     iceCandidatePoolSize: 2
   });
+}
+
+/**
+ * Dynamic downscale + bitrate hint (best-effort; not supported everywhere)
+ * - Use on the SENDER side after tracks added.
+ */
+export async function applySenderQualityHints(peer, { maxBitrate=900_000, scaleDownBy=1.0 } = {}) {
+  const senders = peer.getSenders().filter(s => s.track && s.track.kind === 'video');
+  for (const sender of senders) {
+    const params = sender.getParameters();
+    if (!params.encodings) params.encodings = [{}];
+    params.encodings[0].maxBitrate = maxBitrate;
+    params.encodings[0].scaleResolutionDownBy = scaleDownBy;
+    try { await sender.setParameters(params); } catch {}
+  }
 }
