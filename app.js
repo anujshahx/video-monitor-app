@@ -303,17 +303,9 @@ function generateRoomCode() {
 function classifyCamera(label) {
   const s = (label || '').toLowerCase();
 
-  // Front camera
   if (/front|user|selfie/.test(s)) return 'front';
-
-  // Ultra-wide lens
-  if (/ultra\s*wide|ultrawide|0\.5x|wide\s*angle|wideangle/.test(s)) return 'wide';
-
-  // Back camera (generic)
-  if (/back|rear|environment/.test(s)) return 'back';
-
-  // "wide" (some devices label main cam as wide)
-  if (/wide/.test(s) && !/narrow/.test(s)) return 'back';
+  if (/ultra\s*wide|ultrawide|0\.5x/.test(s)) return 'wide';
+  if (/back|rear|environment|wide/.test(s)) return 'back';
 
   return 'unknown';
 }
@@ -366,31 +358,26 @@ async function enumerateCamerasClassified() {
     kind: classifyCamera(d.label)
   }));
 
-  // Prefer BACK-facing cameras only
-  const backCameras = classified.filter(c => c.kind === 'back' || c.kind === 'wide');
+  // ✅ REPLACE your old Map/byKind logic with THIS:
 
-  // Fallback: if nothing detected as back, use everything
-  const pool = backCameras.length ? backCameras : classified;
+  const back = classified.filter(c => c.kind === 'back');
+  const wide = classified.find(c => c.kind === 'wide');
 
-  let standard = null;
-  let wide = null;
+  // Prefer a back camera as standard
+  const standard = back.length
+    ? back[0]
+    : classified.find(c => c.kind !== 'front');
 
-  for (const c of pool) {
-    if (!wide && c.kind === 'wide') {
-      wide = c;
-      continue;
-    }
-    if (!standard && (c.kind === 'back' || c.kind === 'unknown')) {
-      standard = c;
-    }
-  }
-
-  // Fallbacks
-  if (!standard && pool.length) standard = pool[0];
+  // Fallback if everything failed
+  const fallback = classified[0];
 
   const out = [];
   if (standard) out.push({ ...standard, kind: 'back', label: 'Back Camera' });
   if (wide)     out.push({ ...wide,     kind: 'wide', label: 'Wide Angle' });
+
+  if (!out.length && fallback) {
+    out.push({ ...fallback, kind: 'back', label: 'Back Camera' });
+  }
 
   return out;
 }
