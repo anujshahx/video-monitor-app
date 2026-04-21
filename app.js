@@ -359,15 +359,17 @@ async function enumerateCamerasClassified() {
 // =========================================================
 async function startCamera() {
   try {
-    // Portrait-oriented capture. 9:16 hint helps mobile cameras pick
-    // the correct sensor orientation.
+    // Intentionally NO `aspectRatio` constraint. iPhone sensors are
+    // natively 4:3; forcing 9:16 here makes iOS crop ~25% of the horizontal
+    // FOV from whichever lens it picks, which defeats the point of having
+    // a wide-angle lens at all. Let iOS hand us the native sensor frame —
+    // the monitor side letterboxes it with `object-fit: contain`.
     const baseConstraints = {
       video: {
         facingMode: { ideal: 'environment' },
-        width:  { ideal: 720 },
+        width:  { ideal: 1280 },
         height: { ideal: 1280 },
-        aspectRatio: { ideal: 9 / 16 },
-        frameRate: { ideal: 30, max: 30 }
+        frameRate: { ideal: 24, max: 30 }
       },
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
     };
@@ -509,10 +511,9 @@ async function switchCameraTo(deviceId) {
   const newStream = await navigator.mediaDevices.getUserMedia({
     video: {
       deviceId: { exact: deviceId },
-      width:  { ideal: 720 },
+      width:  { ideal: 1280 },
       height: { ideal: 1280 },
-      aspectRatio: { ideal: 9 / 16 },
-      frameRate: { ideal: 30, max: 30 }
+      frameRate: { ideal: 24, max: 30 }
     },
     audio: false
   });
