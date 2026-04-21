@@ -107,8 +107,18 @@ const nav = (() => {
     const leaving   = get(leavingId);
     const target    = targetId ? get(targetId) : null;
 
-    if (leaving) leaving.classList.remove('active');
-    if (target)  target.classList.remove('under');
+    if (leaving) {
+      leaving.classList.remove('active');
+      leaving.classList.remove('under');
+    }
+    if (target) {
+      // Target becomes the new top-of-stack. It had `.under` while a deeper
+      // screen was pushed on top of it; strip that and ensure it is `.active`
+      // so the CSS transform puts it back on stage (the default .screen rule
+      // translates off-screen if neither active nor data-root).
+      target.classList.remove('under');
+      target.classList.add('active');
+    }
 
     animating = true;
     await wait();
@@ -221,6 +231,7 @@ function teardownSession() {
       pc.onicecandidate = null;
       pc.onicegatheringstatechange = null;
       pc.onconnectionstatechange = null;
+      pc.oniceconnectionstatechange = null;
       pc.ondatachannel = null;
       pc.close();
     }
@@ -293,15 +304,20 @@ function generateRoomCode() {
   return Math.floor(1000 + Math.random() * 9000).toString();
 }
 
-// Classify a video device as standard or wide based on label heuristics.
+// Only true ultra-wide / 0.5x lenses should be marked 'wide'. iOS labels
+// like "Back Dual Wide Camera" refer to the *main* back camera, NOT the
+// ultra-wide lens, so a bare "wide" match would misclassify it.
 function classifyCamera(label) {
   const s = (label || '').toLowerCase();
-  if (/ultra\s*wide|ultrawide|0\.5x|wide\s*angle|wideangle/.test(s)) return 'wide';
-  if (/wide/.test(s) && !/narrow/.test(s)) return 'wide';
+  if (/ultra[-\s]*wide|ultrawide|super[-\s]*wide|0\.5\s*x|\b0\.5\b/.test(s)) return 'wide';
   return 'standard';
 }
 
-// Prefer environment-facing cameras first, then distinct kinds.
+function isFrontCamera(label) {
+  return /front|selfie|facetime|user/i.test(label || '');
+}
+
+// Pick the rear cameras and expose at most one Standard + one Wide option.
 async function enumerateCamerasClassified() {
   let devices = [];
   try {
@@ -309,26 +325,31 @@ async function enumerateCamerasClassified() {
   } catch { return []; }
 
   const videos = devices.filter(d => d.kind === 'videoinput');
-  const classified = videos.map((d, i) => ({
+
+  // Strictly exclude front-facing cameras — a baby monitor should never
+  // default to the selfie lens.
+  const rear = videos.filter(d => !isFrontCamera(d.label));
+
+  // If labels are empty (permission race), fall back to all videos.
+  const pool = rear.length ? rear : videos;
+
+  const classified = pool.map((d, i) => ({
     id: d.deviceId,
     label: d.label || ('Camera ' + (i + 1)),
     kind: classifyCamera(d.label)
   }));
 
-  // Ensure at most one entry per kind in the *options* list (standard + wide).
-  // If we can't find a wide-classified device, still return everything but mark first as standard.
-  const byKind = new Map();
-  for (const c of classified) {
-    if (!byKind.has(c.kind)) byKind.set(c.kind, c);
-  }
+  // Choose the first entry of each kind.
+  const std   = classified.find(c => c.kind === 'standard');
+  const wide  = classified.find(c => c.kind === 'wide');
 
   const out = [];
-  if (byKind.has('standard')) out.push({ ...byKind.get('standard'), kind: 'standard', label: 'Standard' });
-  if (byKind.has('wide'))     out.push({ ...byKind.get('wide'),     kind: 'wide',     label: 'Wide Angle' });
+  if (std)  out.push({ id: std.id,  kind: 'standard', label: 'Standard'   });
+  if (wide) out.push({ id: wide.id, kind: 'wide',     label: 'Wide Angle' });
 
-  // Fallback: if we got nothing (likely permissions issue), return a single generic entry.
+  // Fallback: ensure at least one option is surfaced.
   if (!out.length && classified.length) {
-    out.push({ ...classified[0], kind: 'standard', label: 'Standard' });
+    out.push({ id: classified[0].id, kind: 'standard', label: 'Standard' });
   }
   return out;
 }
@@ -705,9 +726,22 @@ async function createAnswerFromOffer(offer, roomCode) {
         enableLiveControls();
         hideLiveOverlay();
         stopPinging();
-        startStatsPolling();
       } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
         showLiveOverlay('Connection lost');
+        setSignalStrength(0);
+      }
+    };
+
+    // iOS Safari sometimes stays in `new`/`checking` on `connectionState`
+    // even when iceConnectionState reaches `connected`/`completed`. Use the
+    // ICE state as a reliable fallback signal.
+    pc.oniceconnectionstatechange = () => {
+      log('Monitor ICE state', pc.iceConnectionState);
+      const s = pc.iceConnectionState;
+      if (s === 'connected' || s === 'completed') {
+        hideLiveOverlay();
+        if (!statsTimer) startStatsPolling();
+      } else if (s === 'failed' || s === 'disconnected') {
         setSignalStrength(0);
       }
     };
@@ -717,6 +751,9 @@ async function createAnswerFromOffer(offer, roomCode) {
         const vid = document.getElementById('monitorVideo');
         if (vid) vid.srcObject = e.streams[0];
         hideLiveOverlay();
+        // Begin polling as soon as media starts flowing. This is the most
+        // reliable trigger on iOS Safari.
+        if (!statsTimer) startStatsPolling();
         if (monitorMicTrack) {
           const micBtn = document.getElementById('micBtn');
           if (micBtn) micBtn.disabled = false;
@@ -817,15 +854,28 @@ function onCameraSelect(id) {
 function startStatsPolling() {
   try { if (statsTimer) clearInterval(statsTimer); } catch {}
   let lastLost = 0, lastRecv = 0;
+  let primed = false;
   setSignalStrength(3);
 
   statsTimer = setInterval(async () => {
-    if (!pc || pc.connectionState !== 'connected') return;
+    if (!pc) return;
+    // Accept both `connectionState` and `iceConnectionState` — Safari is
+    // inconsistent about which reaches the connected state first.
+    const cs  = pc.connectionState;
+    const ics = pc.iceConnectionState;
+    const alive =
+      cs  === 'connected' || cs  === 'completed' ||
+      ics === 'connected' || ics === 'completed';
+    if (!alive) return;
+
     try {
       const stats = await pc.getStats();
       let inbound;
       stats.forEach(r => {
-        if (r.type === 'inbound-rtp' && r.kind === 'video') inbound = r;
+        // `kind` is the modern field; `mediaType` is what older Safari/
+        // WebKit return. Match either.
+        const k = r.kind || r.mediaType;
+        if (r.type === 'inbound-rtp' && k === 'video') inbound = r;
       });
       if (!inbound) return;
 
@@ -837,8 +887,10 @@ function startStatsPolling() {
       const dRecv = Math.max(0, recv - lastRecv);
       lastLost = lost; lastRecv = recv;
 
+      // First tick primes the deltas — don't score anything yet.
+      if (!primed) { primed = true; return; }
+
       if (dRecv === 0) {
-        // No frames arrived this interval — treat as weak but not dead yet.
         setSignalStrength(1);
         return;
       }
@@ -849,7 +901,9 @@ function startStatsPolling() {
       else if (lossPct > 0.05 || jit > 0.07) bars = 2;
       else if (lossPct > 0.02 || jit > 0.04) bars = 3;
       setSignalStrength(bars);
-    } catch {}
+    } catch (err) {
+      log('getStats error', err);
+    }
   }, 1500);
 }
 
