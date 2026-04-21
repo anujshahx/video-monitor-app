@@ -294,91 +294,42 @@ function generateRoomCode() {
 }
 
 // Classify a video device as standard or wide based on label heuristics.
-// function classifyCamera(label) {
-//   const s = (label || '').toLowerCase();
-//   if (/ultra\s*wide|ultrawide|0\.5x|wide\s*angle|wideangle/.test(s)) return 'wide';
-//   if (/wide/.test(s) && !/narrow/.test(s)) return 'wide';
-//   return 'standard';
-// }
 function classifyCamera(label) {
   const s = (label || '').toLowerCase();
-
-  if (/front|user|selfie/.test(s)) return 'front';
-  if (/ultra\s*wide|ultrawide|0\.5x/.test(s)) return 'wide';
-  if (/back|rear|environment|wide/.test(s)) return 'back';
-
-  return 'unknown';
+  if (/ultra\s*wide|ultrawide|0\.5x|wide\s*angle|wideangle/.test(s)) return 'wide';
+  if (/wide/.test(s) && !/narrow/.test(s)) return 'wide';
+  return 'standard';
 }
 
 // Prefer environment-facing cameras first, then distinct kinds.
-// async function enumerateCamerasClassified() {
-//   let devices = [];
-//   try {
-//     devices = await navigator.mediaDevices.enumerateDevices();
-//   } catch { return []; }
-
-//   const videos = devices.filter(d => d.kind === 'videoinput');
-//   const classified = videos.map((d, i) => ({
-//     id: d.deviceId,
-//     label: d.label || ('Camera ' + (i + 1)),
-//     kind: classifyCamera(d.label)
-//   }));
-
-//   // Ensure at most one entry per kind in the *options* list (standard + wide).
-//   // If we can't find a wide-classified device, still return everything but mark first as standard.
-//   const byKind = new Map();
-//   for (const c of classified) {
-//     if (!byKind.has(c.kind)) byKind.set(c.kind, c);
-//   }
-
-//   const out = [];
-//   if (byKind.has('standard')) out.push({ ...byKind.get('standard'), kind: 'standard', label: 'Standard' });
-//   if (byKind.has('wide'))     out.push({ ...byKind.get('wide'),     kind: 'wide',     label: 'Wide Angle' });
-
-//   // Fallback: if we got nothing (likely permissions issue), return a single generic entry.
-//   if (!out.length && classified.length) {
-//     out.push({ ...classified[0], kind: 'standard', label: 'Standard' });
-//   }
-//   return out;
-// }
-
 async function enumerateCamerasClassified() {
   let devices = [];
   try {
     devices = await navigator.mediaDevices.enumerateDevices();
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 
   const videos = devices.filter(d => d.kind === 'videoinput');
-
   const classified = videos.map((d, i) => ({
     id: d.deviceId,
     label: d.label || ('Camera ' + (i + 1)),
     kind: classifyCamera(d.label)
   }));
 
-  // ✅ REPLACE your old Map/byKind logic with THIS:
-
-  const back = classified.filter(c => c.kind === 'back');
-  const wide = classified.find(c => c.kind === 'wide');
-
-  // Prefer a back camera as standard
-  const standard = back.length
-    ? back[0]
-    : classified.find(c => c.kind !== 'front');
-
-  // Fallback if everything failed
-  const fallback = classified[0];
-
-  const out = [];
-  if (standard) out.push({ ...standard, kind: 'back', label: 'Back Camera' });
-  if (wide)     out.push({ ...wide,     kind: 'wide', label: 'Wide Angle' });
-
-  if (!out.length && fallback) {
-    out.push({ ...fallback, kind: 'back', label: 'Back Camera' });
+  // Ensure at most one entry per kind in the *options* list (standard + wide).
+  // If we can't find a wide-classified device, still return everything but mark first as standard.
+  const byKind = new Map();
+  for (const c of classified) {
+    if (!byKind.has(c.kind)) byKind.set(c.kind, c);
   }
 
+  const out = [];
+  if (byKind.has('standard')) out.push({ ...byKind.get('standard'), kind: 'standard', label: 'Standard' });
+  if (byKind.has('wide'))     out.push({ ...byKind.get('wide'),     kind: 'wide',     label: 'Wide Angle' });
+
+  // Fallback: if we got nothing (likely permissions issue), return a single generic entry.
+  if (!out.length && classified.length) {
+    out.push({ ...classified[0], kind: 'standard', label: 'Standard' });
+  }
   return out;
 }
 
@@ -832,39 +783,14 @@ function onMonitorCtrl(e) {
   }
 }
 
-// function populateCameraSelect(options, activeId) {
-//   const sel = document.getElementById('cameraSelect');
-//   if (!sel) return;
-
-//   sel.innerHTML = '';
-//   if (!options.length) {
-//     const o = document.createElement('option');
-//     o.value = ''; o.textContent = '—';
-//     sel.appendChild(o);
-//     sel.disabled = true;
-//     return;
-//   }
-
-//   for (const c of options) {
-//     const o = document.createElement('option');
-//     o.value = c.id;
-//     o.textContent = c.label || (c.kind === 'wide' ? 'Wide Angle' : 'Standard');
-//     sel.appendChild(o);
-//   }
-//   if (activeId && options.some(o => o.id === activeId)) sel.value = activeId;
-//   sel.disabled = options.length < 2;
-// }
-
 function populateCameraSelect(options, activeId) {
   const sel = document.getElementById('cameraSelect');
   if (!sel) return;
 
   sel.innerHTML = '';
-
   if (!options.length) {
     const o = document.createElement('option');
-    o.value = '';
-    o.textContent = '—';
+    o.value = ''; o.textContent = '—';
     sel.appendChild(o);
     sel.disabled = true;
     return;
@@ -873,14 +799,10 @@ function populateCameraSelect(options, activeId) {
   for (const c of options) {
     const o = document.createElement('option');
     o.value = c.id;
-    o.textContent = c.label || (c.kind === 'wide' ? 'Wide Angle' : 'Back Camera');
+    o.textContent = c.label || (c.kind === 'wide' ? 'Wide Angle' : 'Standard');
     sel.appendChild(o);
   }
-
-  if (activeId && options.some(o => o.id === activeId)) {
-    sel.value = activeId;
-  }
-
+  if (activeId && options.some(o => o.id === activeId)) sel.value = activeId;
   sel.disabled = options.length < 2;
 }
 
