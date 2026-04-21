@@ -294,26 +294,88 @@ function generateRoomCode() {
 }
 
 // Classify a video device as standard or wide based on label heuristics.
+// function classifyCamera(label) {
+//   const s = (label || '').toLowerCase();
+//   if (/ultra\s*wide|ultrawide|0\.5x|wide\s*angle|wideangle/.test(s)) return 'wide';
+//   if (/wide/.test(s) && !/narrow/.test(s)) return 'wide';
+//   return 'standard';
+// }
 function classifyCamera(label) {
   const s = (label || '').toLowerCase();
+
+  // Front camera
+  if (/front|user|selfie/.test(s)) return 'front';
+
+  // Ultra-wide lens
   if (/ultra\s*wide|ultrawide|0\.5x|wide\s*angle|wideangle/.test(s)) return 'wide';
-  if (/wide/.test(s) && !/narrow/.test(s)) return 'wide';
-  return 'standard';
+
+  // Back camera (generic)
+  if (/back|rear|environment/.test(s)) return 'back';
+
+  // "wide" (some devices label main cam as wide)
+  if (/wide/.test(s) && !/narrow/.test(s)) return 'back';
+
+  return 'unknown';
 }
 
 // Prefer environment-facing cameras first, then distinct kinds.
+// async function enumerateCamerasClassified() {
+//   let devices = [];
+//   try {
+//     devices = await navigator.mediaDevices.enumerateDevices();
+//   } catch { return []; }
+
+//   const videos = devices.filter(d => d.kind === 'videoinput');
+//   const classified = videos.map((d, i) => ({
+//     id: d.deviceId,
+//     label: d.label || ('Camera ' + (i + 1)),
+//     kind: classifyCamera(d.label)
+//   }));
+
 async function enumerateCamerasClassified() {
   let devices = [];
   try {
     devices = await navigator.mediaDevices.enumerateDevices();
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 
   const videos = devices.filter(d => d.kind === 'videoinput');
+
   const classified = videos.map((d, i) => ({
     id: d.deviceId,
     label: d.label || ('Camera ' + (i + 1)),
     kind: classifyCamera(d.label)
   }));
+
+  // Prefer BACK-facing cameras only
+  const backCameras = classified.filter(c => c.kind === 'back' || c.kind === 'wide');
+
+  // Fallback: if nothing detected as back, use everything
+  const pool = backCameras.length ? backCameras : classified;
+
+  let standard = null;
+  let wide = null;
+
+  for (const c of pool) {
+    if (!wide && c.kind === 'wide') {
+      wide = c;
+      continue;
+    }
+    if (!standard && (c.kind === 'back' || c.kind === 'unknown')) {
+      standard = c;
+    }
+  }
+
+  // Fallbacks
+  if (!standard && pool.length) standard = pool[0];
+
+  const out = [];
+  if (standard) out.push({ ...standard, kind: 'back', label: 'Back Camera' });
+  if (wide)     out.push({ ...wide,     kind: 'wide', label: 'Wide Angle' });
+
+  return out;
+}
 
   // Ensure at most one entry per kind in the *options* list (standard + wide).
   // If we can't find a wide-classified device, still return everything but mark first as standard.
@@ -783,14 +845,39 @@ function onMonitorCtrl(e) {
   }
 }
 
+// function populateCameraSelect(options, activeId) {
+//   const sel = document.getElementById('cameraSelect');
+//   if (!sel) return;
+
+//   sel.innerHTML = '';
+//   if (!options.length) {
+//     const o = document.createElement('option');
+//     o.value = ''; o.textContent = '—';
+//     sel.appendChild(o);
+//     sel.disabled = true;
+//     return;
+//   }
+
+//   for (const c of options) {
+//     const o = document.createElement('option');
+//     o.value = c.id;
+//     o.textContent = c.label || (c.kind === 'wide' ? 'Wide Angle' : 'Standard');
+//     sel.appendChild(o);
+//   }
+//   if (activeId && options.some(o => o.id === activeId)) sel.value = activeId;
+//   sel.disabled = options.length < 2;
+// }
+
 function populateCameraSelect(options, activeId) {
   const sel = document.getElementById('cameraSelect');
   if (!sel) return;
 
   sel.innerHTML = '';
+
   if (!options.length) {
     const o = document.createElement('option');
-    o.value = ''; o.textContent = '—';
+    o.value = '';
+    o.textContent = '—';
     sel.appendChild(o);
     sel.disabled = true;
     return;
@@ -799,10 +886,14 @@ function populateCameraSelect(options, activeId) {
   for (const c of options) {
     const o = document.createElement('option');
     o.value = c.id;
-    o.textContent = c.label || (c.kind === 'wide' ? 'Wide Angle' : 'Standard');
+    o.textContent = c.label || (c.kind === 'wide' ? 'Wide Angle' : 'Back Camera');
     sel.appendChild(o);
   }
-  if (activeId && options.some(o => o.id === activeId)) sel.value = activeId;
+
+  if (activeId && options.some(o => o.id === activeId)) {
+    sel.value = activeId;
+  }
+
   sel.disabled = options.length < 2;
 }
 
