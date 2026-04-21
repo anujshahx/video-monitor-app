@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1" />
+  <meta name="theme-color" content="#0f1222" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Baby Monitor" />
+  <title>Baby Monitor</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- ============ HOME ============ -->
+    <section class="screen" id="screen-home" data-root>
+      <header class="app-bar">
+        <div class="app-bar-side"></div>
+        <div class="app-bar-title">Baby Monitor</div>
+        <div class="app-bar-side"></div>
+      </header>
+
+      <main class="screen-body">
+        <div class="hero">
+          <h1 class="hero-title">Baby Monitor</h1>
+          <p class="hero-sub">Secure peer-to-peer video with talk-back and soothing sounds.</p>
+        </div>
+
+        <div class="action-stack">
+          <button class="list-btn" onclick="openCamera()">
+            <span class="list-btn-icon camera" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M9.4 4l-1.5 2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2.9L14.6 4H9.4z"/>
+                <circle cx="12" cy="13" r="3.3" fill="#fff"/>
+              </svg>
+            </span>
+            <span class="list-btn-text">
+              <span class="list-btn-title">Use as Camera</span>
+              <span class="list-btn-sub">Place near the crib</span>
+            </span>
+            <span class="list-btn-chev" aria-hidden="true">›</span>
+          </button>
+
+          <button class="list-btn" onclick="openMonitor()">
+            <span class="list-btn-icon monitor" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M21 3H3a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h7v2H7v2h10v-2h-3v-2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 13H3V5h18v11z"/>
+              </svg>
+            </span>
+            <span class="list-btn-text">
+              <span class="list-btn-title">Use as Monitor</span>
+              <span class="list-btn-sub">Watch from another device</span>
+            </span>
+            <span class="list-btn-chev" aria-hidden="true">›</span>
+          </button>
+        </div>
+
+        <div class="footer-note">Both devices need an internet connection. Video is peer-to-peer; only the signaling handshake touches our servers.</div>
+      </main>
+    </section>
+
+    <!-- ============ CAMERA ============ -->
+    <section class="screen" id="screen-camera">
+      <header class="app-bar">
+        <button class="app-bar-back" onclick="goBack()" aria-label="Back">
+          <span class="chev-back" aria-hidden="true">‹</span>
+          <span>Home</span>
+        </button>
+        <div class="app-bar-title">Camera</div>
+        <div class="app-bar-side app-bar-side-right">
+          <span id="cameraConnDot" class="conn-dot" data-state="idle" title="Waiting"></span>
+        </div>
+      </header>
+
+      <main class="screen-body">
+        <div class="card code-card">
+          <div class="card-label">Room code</div>
+          <div id="roomCodeDisplay" class="room-code-display">— — — —</div>
+          <div class="card-hint">Enter this code on the Monitor device</div>
+        </div>
+
+        <div id="cameraStatus" class="status info" style="display:none"></div>
+
+        <div class="video-frame video-frame-portrait">
+          <video id="cameraVideo" autoplay muted playsinline></video>
+        </div>
+        <audio id="remoteAudio" autoplay></audio>
+      </main>
+    </section>
+
+    <!-- ============ MONITOR (join, with numpad) ============ -->
+    <section class="screen" id="screen-monitor">
+      <header class="app-bar">
+        <button class="app-bar-back" onclick="goBack()" aria-label="Back">
+          <span class="chev-back" aria-hidden="true">‹</span>
+          <span>Home</span>
+        </button>
+        <div class="app-bar-title">Monitor</div>
+        <div class="app-bar-side"></div>
+      </header>
+
+      <main class="screen-body monitor-body">
+        <div class="pin-intro">Enter the 4-digit code shown on the camera device</div>
+
+        <div class="pin-display" id="pinDisplay" role="group" aria-label="4-digit code">
+          <span class="pin-cell empty" id="pinDot1"></span>
+          <span class="pin-cell empty" id="pinDot2"></span>
+          <span class="pin-cell empty" id="pinDot3"></span>
+          <span class="pin-cell empty" id="pinDot4"></span>
+        </div>
+
+        <div class="numpad" id="numpad">
+          <button class="numkey" type="button" data-key="1">1</button>
+          <button class="numkey" type="button" data-key="2">2</button>
+          <button class="numkey" type="button" data-key="3">3</button>
+          <button class="numkey" type="button" data-key="4">4</button>
+          <button class="numkey" type="button" data-key="5">5</button>
+          <button class="numkey" type="button" data-key="6">6</button>
+          <button class="numkey" type="button" data-key="7">7</button>
+          <button class="numkey" type="button" data-key="8">8</button>
+          <button class="numkey" type="button" data-key="9">9</button>
+          <span class="numkey-placeholder" aria-hidden="true"></span>
+          <button class="numkey" type="button" data-key="0">0</button>
+          <button class="numkey numkey-icon" type="button" data-key="back" aria-label="Delete last digit">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+              <path d="M22 6a2 2 0 0 0-2-2H9a2 2 0 0 0-1.4.6L1 12l6.6 7.4A2 2 0 0 0 9 20h11a2 2 0 0 0 2-2V6zm-5.3 9.3a1 1 0 1 1-1.4 1.4L13 14.4l-2.3 2.3a1 1 0 1 1-1.4-1.4L11.6 13 9.3 10.7a1 1 0 1 1 1.4-1.4L13 11.6l2.3-2.3a1 1 0 1 1 1.4 1.4L14.4 13l2.3 2.3z"/>
+            </svg>
+          </button>
+        </div>
+
+        <button id="connectBtn" class="btn btn-primary" onclick="joinRoom()" disabled>Connect</button>
+
+        <div id="monitorStatus" class="status error" style="display:none"></div>
+      </main>
+    </section>
+
+    <!-- ============ LIVE ============ -->
+    <section class="screen" id="screen-live">
+      <header class="app-bar">
+        <button class="app-bar-back" onclick="goBack()" aria-label="Back">
+          <span class="chev-back" aria-hidden="true">‹</span>
+          <span>Home</span>
+        </button>
+        <div class="app-bar-title">Live</div>
+        <div class="app-bar-side app-bar-side-right">
+          <span id="signalBars" class="signal-bars" data-strength="0" title="Signal strength" aria-label="Signal strength">
+            <span class="signal-bar"></span>
+            <span class="signal-bar"></span>
+            <span class="signal-bar"></span>
+            <span class="signal-bar"></span>
+          </span>
+        </div>
+      </header>
+
+      <main class="screen-body live-body">
+        <div class="live-video portrait">
+          <video id="monitorVideo" autoplay playsinline></video>
+          <div id="liveOverlay" class="video-overlay">Connecting…</div>
+
+          <div id="motionBanner" class="motion-banner" aria-live="polite">Motion Detected</div>
+
+          <button id="micBtn" class="mic-fab" type="button" aria-label="Hold to talk" disabled
+                  onpointerdown="startTalking()" onpointerup="stopTalking()"
+                  onpointerleave="stopTalking()" onpointercancel="stopTalking()"
+                  ontouchstart="startTalking()" ontouchend="stopTalking()">
+            <svg viewBox="0 0 24 24" class="mic-icon" aria-hidden="true">
+              <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/>
+              <path d="M19 11a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.92V21a1 1 0 0 0 2 0v-3.08A7 7 0 0 0 19 11z"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="live-dock">
+          <label class="dock-field">
+            <span class="dock-label">Sound</span>
+            <select id="soundSelect" disabled onchange="onSoundSelect(this.value)">
+              <option value="">Off</option>
+              <option value="lullaby1">Twinkle</option>
+              <option value="lullaby2">Brahms</option>
+              <option value="whitenoise">White Noise</option>
+              <option value="rain">Rain</option>
+            </select>
+          </label>
+          <label class="dock-field">
+            <span class="dock-label">Camera</span>
+            <select id="cameraSelect" disabled onchange="onCameraSelect(this.value)">
+              <option value="">—</option>
+            </select>
+          </label>
+        </div>
+      </main>
+    </section>
+
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+
+  <script src="app.js"></script>
+</body>
+</html>

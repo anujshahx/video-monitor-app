@@ -1,0 +1,744 @@
+/* =========================================================
+   Baby Monitor — native-app-feel styles
+   Neutral palette, full-viewport pages, stack navigation.
+   ========================================================= */
+
+:root {
+  /* Surfaces */
+  --bg:         #eef1f7;
+  --surface:    #ffffff;
+  --surface-2:  #f6f8fc;
+  --surface-3:  #e9edf5;
+
+  /* Text */
+  --text:       #141a2c;
+  --text-muted: #626b80;
+  --text-faint: #8c93a5;
+
+  /* Lines */
+  --border:     #e2e6ee;
+  --border-2:   #d6dbe6;
+
+  /* Accents */
+  --accent:     #4f6df5;
+  --accent-ink: #ffffff;
+  --accent-bg:  #eaefff;
+
+  --success:    #16a34a;
+  --success-bg: #e8f7ee;
+  --danger:     #dc2626;
+  --danger-bg:  #fde8ea;
+  --info:       #174aa7;
+  --info-bg:    #eaf2fd;
+  --warn:       #c2410c;
+
+  /* Metrics */
+  --app-bar-h:  52px;
+  --radius-sm:  10px;
+  --radius:     14px;
+  --radius-lg:  18px;
+  --radius-xl:  22px;
+
+  /* Safe areas (iOS notch / home indicator) */
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left:   env(safe-area-inset-left, 0px);
+  --safe-right:  env(safe-area-inset-right, 0px);
+
+  /* Motion */
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  --dur:  .32s;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, .05);
+  --shadow:    0 8px 22px rgba(16, 24, 40, .08);
+  --shadow-lg: 0 40px 120px rgba(16, 24, 40, .45);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior: none;
+}
+
+/* =========================================================
+   App shell
+   ========================================================= */
+#app {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: var(--surface-2);
+  isolation: isolate;
+}
+
+/* =========================================================
+   Screens (push/pop stack)
+   ========================================================= */
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+  transform: translateX(100%);
+  transition: transform var(--dur) var(--ease),
+              filter   var(--dur) var(--ease);
+  will-change: transform;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.screen[data-root] { transform: translateX(0); }
+.screen.active     { transform: translateX(0);   z-index: 2; }
+.screen.under      { transform: translateX(-14%); filter: brightness(.92); }
+
+/* =========================================================
+   App bar
+   ========================================================= */
+.app-bar {
+  flex: 0 0 auto;
+  height: calc(var(--app-bar-h) + var(--safe-top));
+  padding-top: var(--safe-top);
+  padding-inline: calc(8px + var(--safe-left)) calc(8px + var(--safe-right));
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  background: color-mix(in oklab, var(--surface) 85%, transparent);
+  backdrop-filter: saturate(180%) blur(18px);
+  -webkit-backdrop-filter: saturate(180%) blur(18px);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  z-index: 3;
+}
+
+.app-bar-title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: var(--text);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.app-bar-side        { min-width: 80px; display: flex; align-items: center; }
+.app-bar-side-right  { justify-content: flex-end; padding-right: 8px; }
+
+.app-bar-back {
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font-size: 16px;
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  font-weight: 500;
+  font-family: inherit;
+  border-radius: 10px;
+  transition: background .15s ease;
+}
+.app-bar-back:hover   { background: var(--accent-bg); }
+.app-bar-back:active  { background: color-mix(in oklab, var(--accent-bg) 70%, var(--accent) 30%); }
+.app-bar-back .chev-back {
+  font-size: 26px;
+  line-height: 1;
+  margin-right: 2px;
+  font-weight: 400;
+}
+
+/* Connection indicator (still used on camera screen) */
+.conn-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--text-faint) 25%, transparent);
+  transition: background .2s ease, box-shadow .2s ease;
+}
+.conn-dot[data-state="idle"]     { background: var(--text-faint); }
+.conn-dot[data-state="pending"]  { background: #eab308; box-shadow: 0 0 0 3px rgba(234,179,8,.2); animation: pulse 1.2s infinite; }
+.conn-dot[data-state="live"]     { background: var(--success); box-shadow: 0 0 0 3px rgba(22,163,74,.18); }
+.conn-dot[data-state="error"]    { background: var(--danger); box-shadow: 0 0 0 3px rgba(220,38,38,.2); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .45; }
+}
+
+/* =========================================================
+   Signal strength bars (Live screen, top right)
+   ========================================================= */
+.signal-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 4px 4px;
+  height: 18px;
+}
+.signal-bar {
+  width: 4px;
+  background: var(--text-faint);
+  border-radius: 2px;
+  opacity: .28;
+  transition: background .2s ease, opacity .2s ease;
+}
+.signal-bar:nth-child(1) { height: 5px; }
+.signal-bar:nth-child(2) { height: 9px; }
+.signal-bar:nth-child(3) { height: 13px; }
+.signal-bar:nth-child(4) { height: 17px; }
+
+.signal-bars[data-strength="1"] .signal-bar:nth-child(-n+1),
+.signal-bars[data-strength="2"] .signal-bar:nth-child(-n+2),
+.signal-bars[data-strength="3"] .signal-bar:nth-child(-n+3),
+.signal-bars[data-strength="4"] .signal-bar:nth-child(-n+4) {
+  opacity: 1;
+}
+
+.signal-bars[data-strength="1"] .signal-bar:nth-child(-n+1) { background: var(--danger); }
+.signal-bars[data-strength="2"] .signal-bar:nth-child(-n+2) { background: #eab308; }
+.signal-bars[data-strength="3"] .signal-bar:nth-child(-n+3) { background: var(--success); }
+.signal-bars[data-strength="4"] .signal-bar:nth-child(-n+4) { background: var(--success); }
+
+/* =========================================================
+   Screen body
+   ========================================================= */
+.screen-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px;
+  padding-left: calc(16px + var(--safe-left));
+  padding-right: calc(16px + var(--safe-right));
+  padding-bottom: calc(24px + var(--safe-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* =========================================================
+   Home: hero + list buttons
+   ========================================================= */
+.hero {
+  text-align: center;
+  padding: 28px 8px 8px;
+}
+.hero-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+.hero-sub {
+  color: var(--text-muted);
+  margin-top: 6px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.action-stack { display: flex; flex-direction: column; gap: 12px; }
+
+.list-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: transform .1s ease, background .15s ease, border-color .15s ease;
+  font-family: inherit;
+}
+.list-btn:hover  { background: var(--surface-2); }
+.list-btn:active { transform: scale(.985); background: var(--surface-3); }
+
+.list-btn-icon {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.list-btn-icon svg { width: 24px; height: 24px; }
+.list-btn-icon.monitor { background: #e8f7ee; color: #0f8a4f; }
+
+.list-btn-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.list-btn-title { font-size: 16px; font-weight: 600; color: var(--text); }
+.list-btn-sub   { font-size: 13px; color: var(--text-muted); }
+.list-btn-chev  { font-size: 26px; color: var(--text-faint); line-height: 1; padding-right: 4px; }
+
+.footer-note {
+  margin-top: auto;
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: center;
+  padding: 16px 8px 4px;
+  line-height: 1.5;
+}
+
+/* =========================================================
+   Cards
+   ========================================================= */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.card-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.card-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.code-card { text-align: center; }
+
+/* =========================================================
+   Buttons
+   ========================================================= */
+.btn {
+  width: 100%;
+  padding: 13px 16px;
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--accent-ink);
+  background: var(--accent);
+  font-weight: 600;
+  font-size: 16px;
+  cursor: pointer;
+  transition: transform .08s ease, box-shadow .2s ease, opacity .15s, background .15s;
+  box-shadow: var(--shadow-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: inherit;
+}
+.btn:active:not(:disabled) { transform: scale(.98); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.btn-primary { background: var(--accent); }
+.btn-primary:hover:not(:disabled) { background: color-mix(in oklab, var(--accent) 88%, #000 12%); }
+
+/* =========================================================
+   Status chips
+   ========================================================= */
+.status {
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.4;
+}
+.status.success { background: var(--success-bg); color: #146c2e; }
+.status.error   { background: var(--danger-bg);  color: #821d2a; }
+.status.info    { background: var(--info-bg);    color: var(--info); }
+
+/* =========================================================
+   Camera preview — portrait framed preview
+   ========================================================= */
+.video-frame {
+  background: #000;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+.video-frame video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.video-frame-portrait {
+  aspect-ratio: 9 / 16;
+  max-height: 56vh;
+  margin: 0 auto;
+  width: auto;
+  max-width: 100%;
+}
+
+/* =========================================================
+   Room code display (camera side)
+   ========================================================= */
+.room-code-display {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: .25em;
+  text-align: center;
+  padding: 6px 0 2px 10px;
+  color: var(--text);
+  line-height: 1.1;
+}
+
+/* =========================================================
+   Monitor — numpad + PIN display
+   ========================================================= */
+.monitor-body {
+  align-items: center;
+  gap: 20px;
+  padding-top: 28px;
+}
+
+.pin-intro {
+  font-size: 14px;
+  color: var(--text-muted);
+  text-align: center;
+  max-width: 280px;
+  line-height: 1.45;
+}
+
+.pin-display {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding: 6px 0 4px;
+}
+.pin-cell {
+  width: 44px;
+  height: 56px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+  transition: border-color .15s ease, transform .1s ease, background .15s ease;
+}
+.pin-cell.filled {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.pin-cell.empty::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  opacity: .35;
+}
+
+.numpad {
+  display: grid;
+  grid-template-columns: repeat(3, 76px);
+  gap: 14px;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.numkey {
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 28px;
+  font-weight: 700;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: transform .08s ease, background .15s ease, color .15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+.numkey:hover      { background: var(--surface-2); }
+.numkey:active     { transform: scale(.94); background: var(--accent-bg); color: var(--accent); }
+.numkey-icon       { background: transparent; box-shadow: none; color: var(--text-muted); }
+.numkey-icon:hover { background: var(--surface-3); }
+.numkey-icon:active{ background: var(--danger-bg); color: var(--danger); }
+.numkey-placeholder{ display: inline-block; width: 76px; height: 76px; }
+
+/* =========================================================
+   Live screen
+   ========================================================= */
+.live-body {
+  padding: 12px 12px calc(14px + var(--safe-bottom));
+  padding-left: calc(12px + var(--safe-left));
+  padding-right: calc(12px + var(--safe-right));
+  gap: 12px;
+}
+
+/* Portrait video fills available vertical space */
+.live-video {
+  position: relative;
+  width: 100%;
+  background: #000;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.live-video.portrait {
+  aspect-ratio: auto;
+}
+
+.live-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: #000;
+}
+
+.video-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,255,255,.78);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: .01em;
+  background: rgba(0,0,0,.35);
+  pointer-events: none;
+  transition: opacity .3s ease;
+}
+.video-overlay.hidden { opacity: 0; }
+
+/* =========================================================
+   Motion banner (green flashing overlay on live video)
+   ========================================================= */
+.motion-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(22, 163, 74, .92);
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  padding: 8px 14px;
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(22,163,74,.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease;
+  z-index: 5;
+}
+.motion-banner.flash {
+  animation: motionFlashChip 2.4s ease-out forwards;
+}
+
+@keyframes motionFlashChip {
+  0%   { opacity: 0; transform: translate(-50%, -6px); }
+  8%   { opacity: 1; transform: translate(-50%, 0); }
+  20%  { opacity: .25; }
+  32%  { opacity: 1; }
+  50%  { opacity: .25; }
+  65%  { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, 0); }
+}
+
+/* Green screen flash on top of video */
+.live-video.motion-flash::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(22, 163, 74, .35);
+  pointer-events: none;
+  animation: motionFlashScreen 2.4s ease-out forwards;
+  z-index: 4;
+}
+
+@keyframes motionFlashScreen {
+  0%,
+  100% { opacity: 0; }
+  8%,
+  32%,
+  65% { opacity: 1; }
+  20%,
+  50% { opacity: 0; }
+}
+
+/* =========================================================
+   Mic FAB (inside the video, bottom-right)
+   ========================================================= */
+.mic-fab {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 6;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 10px 24px rgba(79, 109, 245, .45),
+              0 0 0 3px rgba(255,255,255,.1);
+  transition: transform .08s ease, background .15s ease, box-shadow .2s ease, opacity .15s;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  font-family: inherit;
+}
+.mic-fab:active:not(:disabled) { transform: scale(.94); }
+.mic-fab:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+  background: rgba(140, 147, 165, .9);
+  box-shadow: 0 2px 6px rgba(0,0,0,.2);
+}
+.mic-fab.active {
+  background: #ef4444;
+  box-shadow: 0 0 0 10px rgba(239, 68, 68, .25),
+              0 10px 24px rgba(239, 68, 68, .45);
+}
+.mic-icon { width: 26px; height: 26px; fill: currentColor; }
+
+/* =========================================================
+   Live dock (Sound + Camera dropdowns under the video)
+   ========================================================= */
+.live-dock {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.dock-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dock-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.dock-field select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  padding: 10px 30px 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background-color: var(--surface-2);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) 50%,
+    calc(100% - 11px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease, opacity .15s;
+}
+.dock-field select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79, 109, 245, .15);
+}
+.dock-field select:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+/* =========================================================
+   Wide-screen phone frame
+   ========================================================= */
+@media (min-width: 720px) {
+  body {
+    background: radial-gradient(1200px 800px at 50% 30%, #1a2040 0%, #0b1021 55%, #05070f 100%);
+  }
+  #app {
+    position: fixed;
+    inset: 50% auto auto 50%;
+    transform: translate(-50%, -50%);
+    width: 420px;
+    height: min(820px, calc(100vh - 40px));
+    border-radius: 32px;
+    overflow: hidden;
+    box-shadow:
+      var(--shadow-lg),
+      0 0 0 10px #0b0e18,
+      0 0 0 11px #1a1f30;
+  }
+  .screen { border-radius: 0; }
+}
+
+@media (min-width: 720px) and (max-height: 720px) {
+  #app { height: calc(100vh - 20px); border-radius: 24px; }
+}
+
+/* =========================================================
+   Small phones
+   ========================================================= */
+@media (max-width: 360px) {
+  .hero-title        { font-size: 24px; }
+  .room-code-display { font-size: 36px; letter-spacing: .22em; padding-left: 8px; }
+  .numpad            { grid-template-columns: repeat(3, 68px); gap: 12px; }
+  .numkey,
+  .numkey-placeholder{ width: 68px; height: 68px; font-size: 26px; }
+  .pin-cell          { width: 40px; height: 52px; font-size: 26px; }
+}
