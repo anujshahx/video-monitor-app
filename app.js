@@ -332,6 +332,24 @@ function classifyCamera(label) {
 //     kind: classifyCamera(d.label)
 //   }));
 
+//   // Ensure at most one entry per kind in the *options* list (standard + wide).
+//   // If we can't find a wide-classified device, still return everything but mark first as standard.
+//   const byKind = new Map();
+//   for (const c of classified) {
+//     if (!byKind.has(c.kind)) byKind.set(c.kind, c);
+//   }
+
+//   const out = [];
+//   if (byKind.has('standard')) out.push({ ...byKind.get('standard'), kind: 'standard', label: 'Standard' });
+//   if (byKind.has('wide'))     out.push({ ...byKind.get('wide'),     kind: 'wide',     label: 'Wide Angle' });
+
+//   // Fallback: if we got nothing (likely permissions issue), return a single generic entry.
+//   if (!out.length && classified.length) {
+//     out.push({ ...classified[0], kind: 'standard', label: 'Standard' });
+//   }
+//   return out;
+// }
+
 async function enumerateCamerasClassified() {
   let devices = [];
   try {
@@ -374,24 +392,6 @@ async function enumerateCamerasClassified() {
   if (standard) out.push({ ...standard, kind: 'back', label: 'Back Camera' });
   if (wide)     out.push({ ...wide,     kind: 'wide', label: 'Wide Angle' });
 
-  return out;
-}
-
-  // Ensure at most one entry per kind in the *options* list (standard + wide).
-  // If we can't find a wide-classified device, still return everything but mark first as standard.
-  const byKind = new Map();
-  for (const c of classified) {
-    if (!byKind.has(c.kind)) byKind.set(c.kind, c);
-  }
-
-  const out = [];
-  if (byKind.has('standard')) out.push({ ...byKind.get('standard'), kind: 'standard', label: 'Standard' });
-  if (byKind.has('wide'))     out.push({ ...byKind.get('wide'),     kind: 'wide',     label: 'Wide Angle' });
-
-  // Fallback: if we got nothing (likely permissions issue), return a single generic entry.
-  if (!out.length && classified.length) {
-    out.push({ ...classified[0], kind: 'standard', label: 'Standard' });
-  }
   return out;
 }
 
