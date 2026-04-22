@@ -525,14 +525,13 @@ body {
   aspect-ratio: auto;
 }
 
-/* `contain` preserves the camera's full sensor FOV and lets the black
-   video container act as a clean letterbox. `cover` would crop the sides,
-   which is undesirable when the whole point of switching to the wide
-   lens is to see more of the room. */
+/* `cover` fills the live frame with no black bars. We trade a little
+   horizontal FOV for a full-bleed picture — the wide lens still shows
+   substantially more than the standard lens even after the crop. */
 .live-video video {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   display: block;
   background: #000;
 }
@@ -734,17 +733,18 @@ body {
 }
 
 /* =========================================================
-   Motion FAB (inside the video, bottom-left)
+   Motion FAB (inside the video, bottom-left) — matched in size
+   and elevation to the mic FAB opposite it.
    ========================================================= */
 .motion-fab {
   position: absolute;
   left: 14px;
   bottom: 14px;
   z-index: 6;
-  width: 46px;
-  height: 46px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.62);
   color: #fff;
   border: 0;
   padding: 0;
@@ -752,14 +752,16 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 14px rgba(0,0,0,.35);
-  transition: transform .08s ease, background .15s ease;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .45),
+              0 0 0 3px rgba(255, 255, 255, .08);
+  transition: transform .08s ease, background .15s ease, box-shadow .2s ease;
   -webkit-tap-highlight-color: transparent;
   font-family: inherit;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
-.motion-fab:active { transform: scale(.92); background: rgba(0,0,0,0.75); }
+.motion-fab:active { transform: scale(.94); background: rgba(0, 0, 0, 0.8); }
+.motion-icon { width: 30px; height: 30px; fill: currentColor; }
 
 /* =========================================================
    Motion-zones overlay (layered inside the live video)
@@ -774,6 +776,11 @@ body {
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
   transition: opacity .18s ease;
+  /* Match the live-video frame's rounded corners. Some browsers don't
+     clip backdrop-filter children against an ancestor's border-radius,
+     so apply it directly here. */
+  border-radius: var(--radius-lg);
+  overflow: hidden;
 }
 .zones-overlay.hidden {
   opacity: 0;
