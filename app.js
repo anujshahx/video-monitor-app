@@ -51,14 +51,18 @@ let notifyCtx = null;              // audio ctx for short beep on motion
 let connLostTimer = null;          // interval id for repeating alarm beep
 let wasEverConnected = false;      // so we don't alert on initial connect phase
 
-// Motion detection zones (monitor is source of truth; camera mirrors it)
+// Motion detection settings (monitor is source of truth; camera mirrors)
+// Semantics: `mask[i] === true` means "TRACK this cell for motion".
+// Default = all cells selected (track everywhere); user can narrow.
 const ZONE_COLS = 6;
 const ZONE_ROWS = 8;
 const ZONE_TOTAL = ZONE_COLS * ZONE_ROWS;
 const ZONE_STORAGE_KEY = 'bm_zone_mask_v1';
-let zoneMaskMonitor = null;        // Array<boolean> length 48 on monitor
-let zoneMaskCamera = null;         // Array<boolean> length 48 on camera (received)
-let zoneEditing = null;            // working copy while zones screen open
+const MOTION_ENABLED_KEY = 'bm_motion_enabled_v1';
+let zoneMaskMonitor = null;         // Array<boolean> length 48 on monitor
+let motionEnabledMonitor = null;    // boolean on monitor
+let zoneMaskCamera = null;          // { cols, rows, mask } on camera (received)
+let motionEnabledCamera = true;     // boolean on camera (received; default true)
 
 // Camera-side audio (sounds)
 let audioCtx = null;
@@ -148,21 +152,8 @@ const nav = (() => {
 
   window.addEventListener('popstate', async () => {
     if (stack.length > 1) {
-      const leavingId = stack[stack.length - 1];
-      const targetId  = stack[stack.length - 2];
-      // Popping the motion-zones screen back onto Live must NOT tear down
-      // the WebRTC session — it's a sibling settings view for the live feed.
-      const preserveSession =
-        leavingId === 'screen-motion-zones' && targetId === 'screen-live';
-
-      // Give the zones screen a chance to clean up its own local state
-      // before the DOM pops.
-      if (leavingId === 'screen-motion-zones') {
-        try { teardownZonesScreen(); } catch (e) { console.error(e); }
-      }
-
-      const needsTeardown = !preserveSession &&
-        (pc || localStream || monitorMicStream || dataChannel || currentRoomCode);
+      const needsTeardown =
+        pc || localStream || monitorMicStream || dataChannel || currentRoomCode;
       if (needsTeardown) { try { teardownSession(); } catch (e) { console.error(e); } }
       await _popDom();
     }
@@ -244,6 +235,10 @@ function teardownSession() {
   const _lv = document.querySelector('#screen-live .live-video');
   if (_lv) _lv.classList.remove('connection-lost');
   wasEverConnected = false;
+
+  // Hide motion-zones overlay if it was open.
+  const _zo = document.getElementById('zonesOverlay');
+  if (_zo) { _zo.classList.add('hidden'); _zo.setAttribute('aria-hidden', 'true'); }
 
   try { if (motionStop) motionStop(); } catch {}
   motionStop = null;
@@ -334,7 +329,7 @@ function generateRoomCode() {
 }
 
 // =========================================================
-// Motion zone mask (monitor-side persistence + transport)
+// Motion settings (monitor-side persistence + transport)
 // =========================================================
 function defaultZoneMask() {
   return new Array(ZONE_TOTAL).fill(true);
@@ -352,8 +347,21 @@ function loadZoneMaskFromStorage() {
   return defaultZoneMask();
 }
 
+function loadMotionEnabledFromStorage() {
+  try {
+    const raw = localStorage.getItem(MOTION_ENABLED_KEY);
+    if (raw === 'false') return false;
+    if (raw === 'true')  return true;
+  } catch {}
+  return true; // default: on
+}
+
 function saveZoneMaskToStorage(mask) {
   try { localStorage.setItem(ZONE_STORAGE_KEY, JSON.stringify(mask)); } catch {}
+}
+
+function saveMotionEnabledToStorage(enabled) {
+  try { localStorage.setItem(MOTION_ENABLED_KEY, enabled ? 'true' : 'false'); } catch {}
 }
 
 function ensureMonitorZoneMask() {
@@ -361,9 +369,20 @@ function ensureMonitorZoneMask() {
   return zoneMaskMonitor;
 }
 
-function sendZoneMaskToCamera() {
-  const mask = ensureMonitorZoneMask();
-  sendCtrl({ action: 'zone_mask', cols: ZONE_COLS, rows: ZONE_ROWS, mask });
+function ensureMotionEnabled() {
+  if (motionEnabledMonitor === null) motionEnabledMonitor = loadMotionEnabledFromStorage();
+  return motionEnabledMonitor;
+}
+
+// One consolidated message carries both the enabled flag and the mask.
+function sendMotionConfigToCamera() {
+  sendCtrl({
+    action:  'motion_config',
+    enabled: ensureMotionEnabled(),
+    cols:    ZONE_COLS,
+    rows:    ZONE_ROWS,
+    mask:    ensureMonitorZoneMask()
+  });
 }
 
 // Only true ultra-wide / 0.5x lenses should be marked 'wide'. iOS labels
@@ -448,15 +467,17 @@ async function startCamera() {
     // Enumerate cameras after permission is granted (so labels are populated).
     availableCameras = await enumerateCamerasClassified();
 
-    // Start motion detection on local preview. Mask (if any) is supplied by
-    // the monitor over the data channel — we read it each tick.
+    // Start motion detection on local preview. Both mask and enabled flag
+    // are supplied by the monitor over the data channel; we read them
+    // each tick so updates take effect immediately.
     motionStop = startMotionDetection(camVideo, () => {
       sendCtrl({ action: 'motion', ts: Date.now() });
     }, {
       fps: 6,
       cooldownMs: 8000,
       threshold: 18000,
-      getMask: () => zoneMaskCamera
+      getMask:    () => zoneMaskCamera,
+      getEnabled: () => motionEnabledCamera
     });
 
     pc = new RTCPeerConnection(rtcConfig);
@@ -565,15 +586,19 @@ async function onCameraCtrl(ev) {
     catch (err) { log('switch failed', err); }
   }
 
-  if (msg.action === 'zone_mask' && Array.isArray(msg.mask) && msg.cols && msg.rows) {
-    if (msg.mask.length === msg.cols * msg.rows) {
+  if (msg.action === 'motion_config') {
+    if (typeof msg.enabled === 'boolean') {
+      motionEnabledCamera = msg.enabled;
+    }
+    if (Array.isArray(msg.mask) && msg.cols && msg.rows &&
+        msg.mask.length === msg.cols * msg.rows) {
       zoneMaskCamera = {
         cols: msg.cols,
         rows: msg.rows,
         mask: msg.mask.map(v => !!v)
       };
-      log('Camera received zone mask', zoneMaskCamera);
     }
+    log('Camera motion_config', { enabled: motionEnabledCamera, mask: zoneMaskCamera });
   }
 }
 
@@ -623,7 +648,8 @@ async function switchCameraTo(deviceId) {
     fps: 6,
     cooldownMs: 8000,
     threshold: 18000,
-    getMask: () => zoneMaskCamera
+    getMask:    () => zoneMaskCamera,
+    getEnabled: () => motionEnabledCamera
   });
 }
 
@@ -654,6 +680,12 @@ function startMotionDetection(videoEl, onMotion, opts = {}) {
   const interval = Math.max(80, Math.floor(1000 / fps));
 
   const handle = setInterval(() => {
+    // Honor global enable flag — if disabled, skip entirely (still keep
+    // `last` fresh so we don't trigger a false-positive when re-enabled).
+    if (typeof opts.getEnabled === 'function' && !opts.getEnabled()) {
+      last = null;
+      return;
+    }
     if (!videoEl || !videoEl.videoWidth || videoEl.readyState < 2) return;
 
     const w = 160, h = 120;
@@ -680,6 +712,8 @@ function startMotionDetection(videoEl, onMotion, opts = {}) {
       } else {
         activeCells = 0;
         for (let c = 0; c < total; c++) if (mask[c]) activeCells++;
+        // mask[i] === true means "track this cell". If user selected 0
+        // cells we have nothing to track, so bail without alerting.
         if (activeCells === 0) { last = frame; return; }
 
         // If every cell is active, fast path.
@@ -701,8 +735,8 @@ function startMotionDetection(videoEl, onMotion, opts = {}) {
         }
       }
 
-      // Scale threshold proportional to the active-cell fraction so that
-      // masking a fan (say) doesn't make the remaining area hyper-sensitive.
+      // Scale threshold proportional to tracked-cell fraction so that
+      // shrinking the tracked area doesn't make it hyper-sensitive.
       const frac = mask && total ? (activeCells / total) : 1;
       const adjThreshold = baseThreshold * Math.max(0.08, frac);
 
@@ -835,10 +869,10 @@ async function createAnswerFromOffer(offer, roomCode) {
       dataChannel.onopen = () => {
         log('Monitor DC open');
         startPinging();
-        // Ask camera about available lenses, and push the current zone mask.
+        // Ask camera about available lenses, and push the motion config.
         setTimeout(() => {
           sendCtrl({ action: 'request_cameras' });
-          sendZoneMaskToCamera();
+          sendMotionConfigToCamera();
         }, 150);
       };
       dataChannel.onmessage = (e) => onMonitorCtrl(e);
@@ -1041,79 +1075,55 @@ function startStatsPolling() {
 }
 
 // =========================================================
-// Motion zones screen (monitor)
+// Motion-zones overlay (monitor, in-place over the live video)
+//   - Gear FAB on the live video opens this overlay
+//   - Toggle switch turns motion detection on/off
+//   - Grid (visible only when toggle on) lets the user mark which cells
+//     the camera should TRACK. Selected = track. Default = all selected.
+//   - Changes auto-persist and auto-sync to camera — no Done button.
 // =========================================================
-function openMotionZones() {
-  // Only meaningful from the Live screen.
-  if (nav.current() !== 'screen-live') return;
+function openZonesOverlay() {
+  const overlay = document.getElementById('zonesOverlay');
+  if (!overlay) return;
   ensureMonitorZoneMask();
-  nav.push('screen-motion-zones', () => {
-    // Working copy so Cancel (via back) can discard edits.
-    zoneEditing = zoneMaskMonitor.slice();
+  ensureMotionEnabled();
 
-    const zv  = document.getElementById('zoneVideo');
-    const mv  = document.getElementById('monitorVideo');
-    if (zv && mv && mv.srcObject) {
-      try { zv.srcObject = mv.srcObject; } catch {}
-      zv.play().catch(() => {});
-    }
+  // Sync controls to current state before showing.
+  const toggle = document.getElementById('motionToggle');
+  if (toggle) toggle.checked = motionEnabledMonitor;
 
-    renderZoneGrid();
-    fitZoneOverlay();
-    // Re-fit after video metadata arrives (sizes based on native aspect).
-    if (zv) {
-      const onMeta = () => { fitZoneOverlay(); zv.removeEventListener('loadedmetadata', onMeta); };
-      zv.addEventListener('loadedmetadata', onMeta);
-    }
-    window.addEventListener('resize', fitZoneOverlay);
-  });
+  renderZoneGrid();
+  applyMotionEnabledUi();
+
+  overlay.classList.remove('hidden');
+  overlay.setAttribute('aria-hidden', 'false');
 }
 
-function teardownZonesScreen() {
-  window.removeEventListener('resize', fitZoneOverlay);
-  const zv = document.getElementById('zoneVideo');
-  if (zv) { try { zv.pause(); } catch {} zv.srcObject = null; }
-  zoneEditing = null;
+function closeZonesOverlay() {
+  const overlay = document.getElementById('zonesOverlay');
+  if (!overlay) return;
+  overlay.classList.add('hidden');
+  overlay.setAttribute('aria-hidden', 'true');
 }
 
-function fitZoneOverlay() {
-  const zv = document.getElementById('zoneVideo');
-  const overlay = document.getElementById('zoneGrid');
-  if (!zv || !overlay) return;
-  const container = zv.parentElement;
-  if (!container) return;
-  const cw = container.clientWidth;
-  const ch = container.clientHeight;
-  if (!cw || !ch) return;
-
-  const vw = zv.videoWidth || 0;
-  const vh = zv.videoHeight || 0;
-  let w, h, left, top;
-  if (vw && vh) {
-    const va = vw / vh;
-    const ca = cw / ch;
-    if (va > ca) { w = cw; h = cw / va; }
-    else         { h = ch; w = ch * va; }
-    left = (cw - w) / 2;
-    top  = (ch - h) / 2;
-  } else {
-    // Metadata not yet available — cover full container.
-    w = cw; h = ch; left = 0; top = 0;
-  }
-  overlay.style.width  = w + 'px';
-  overlay.style.height = h + 'px';
-  overlay.style.left   = left + 'px';
-  overlay.style.top    = top  + 'px';
+function applyMotionEnabledUi() {
+  const grid = document.getElementById('zoneGrid');
+  const hint = document.getElementById('zonesHint');
+  const on = !!motionEnabledMonitor;
+  if (grid) grid.classList.toggle('hidden', !on);
+  if (hint) hint.classList.toggle('hidden', !on);
 }
 
 function renderZoneGrid() {
   const grid = document.getElementById('zoneGrid');
   if (!grid) return;
   grid.innerHTML = '';
-  const mask = zoneEditing || ensureMonitorZoneMask();
+  const mask = ensureMonitorZoneMask();
   for (let i = 0; i < ZONE_TOTAL; i++) {
     const cell = document.createElement('div');
-    cell.className = 'zone-cell' + (mask[i] ? '' : ' disabled');
+    // Semantic flip: mask[i] === true means "track this cell" → visually
+    // highlighted (selected). Unselected cells are transparent.
+    cell.className = 'zone-cell' + (mask[i] ? ' selected' : '');
     cell.setAttribute('data-index', String(i));
     cell.addEventListener('click', () => toggleZoneCell(i));
     grid.appendChild(cell);
@@ -1121,27 +1131,24 @@ function renderZoneGrid() {
 }
 
 function toggleZoneCell(i) {
-  if (!zoneEditing) return;
-  zoneEditing[i] = !zoneEditing[i];
+  const mask = ensureMonitorZoneMask();
+  mask[i] = !mask[i];
+  zoneMaskMonitor = mask;
+  saveZoneMaskToStorage(mask);
+
   const grid = document.getElementById('zoneGrid');
-  if (!grid) return;
-  const cell = grid.children[i];
-  if (cell) cell.classList.toggle('disabled', !zoneEditing[i]);
-}
-
-function resetMotionZones() {
-  zoneEditing = defaultZoneMask();
-  renderZoneGrid();
-}
-
-function saveMotionZones() {
-  if (zoneEditing) {
-    zoneMaskMonitor = zoneEditing.slice();
-    saveZoneMaskToStorage(zoneMaskMonitor);
-    sendZoneMaskToCamera();
+  if (grid && grid.children[i]) {
+    grid.children[i].classList.toggle('selected', mask[i]);
   }
-  // Pop back to Live (history back preserves session via popstate guard).
-  if (nav.current() === 'screen-motion-zones') history.back();
+  // Push latest config to the camera immediately (silent no-op if DC closed).
+  sendMotionConfigToCamera();
+}
+
+function onMotionToggle(enabled) {
+  motionEnabledMonitor = !!enabled;
+  saveMotionEnabledToStorage(motionEnabledMonitor);
+  applyMotionEnabledUi();
+  sendMotionConfigToCamera();
 }
 
 // =========================================================
