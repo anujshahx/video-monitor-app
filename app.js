@@ -48,6 +48,17 @@ let activeCameraId = null;
 // Monitor-side specific
 let statsTimer = null;             // signal strength polling
 let notifyCtx = null;              // audio ctx for short beep on motion
+let connLostTimer = null;          // interval id for repeating alarm beep
+let wasEverConnected = false;      // so we don't alert on initial connect phase
+
+// Motion detection zones (monitor is source of truth; camera mirrors it)
+const ZONE_COLS = 6;
+const ZONE_ROWS = 8;
+const ZONE_TOTAL = ZONE_COLS * ZONE_ROWS;
+const ZONE_STORAGE_KEY = 'bm_zone_mask_v1';
+let zoneMaskMonitor = null;        // Array<boolean> length 48 on monitor
+let zoneMaskCamera = null;         // Array<boolean> length 48 on camera (received)
+let zoneEditing = null;            // working copy while zones screen open
 
 // Camera-side audio (sounds)
 let audioCtx = null;
@@ -137,8 +148,21 @@ const nav = (() => {
 
   window.addEventListener('popstate', async () => {
     if (stack.length > 1) {
-      const needsTeardown =
-        pc || localStream || monitorMicStream || dataChannel || currentRoomCode;
+      const leavingId = stack[stack.length - 1];
+      const targetId  = stack[stack.length - 2];
+      // Popping the motion-zones screen back onto Live must NOT tear down
+      // the WebRTC session — it's a sibling settings view for the live feed.
+      const preserveSession =
+        leavingId === 'screen-motion-zones' && targetId === 'screen-live';
+
+      // Give the zones screen a chance to clean up its own local state
+      // before the DOM pops.
+      if (leavingId === 'screen-motion-zones') {
+        try { teardownZonesScreen(); } catch (e) { console.error(e); }
+      }
+
+      const needsTeardown = !preserveSession &&
+        (pc || localStream || monitorMicStream || dataChannel || currentRoomCode);
       if (needsTeardown) { try { teardownSession(); } catch (e) { console.error(e); } }
       await _popDom();
     }
@@ -215,6 +239,11 @@ function teardownSession() {
 
   try { if (statsTimer) clearInterval(statsTimer); } catch {}
   statsTimer = null;
+
+  try { stopConnectionLostBeep(); } catch {}
+  const _lv = document.querySelector('#screen-live .live-video');
+  if (_lv) _lv.classList.remove('connection-lost');
+  wasEverConnected = false;
 
   try { if (motionStop) motionStop(); } catch {}
   motionStop = null;
@@ -304,6 +333,39 @@ function generateRoomCode() {
   return Math.floor(1000 + Math.random() * 9000).toString();
 }
 
+// =========================================================
+// Motion zone mask (monitor-side persistence + transport)
+// =========================================================
+function defaultZoneMask() {
+  return new Array(ZONE_TOTAL).fill(true);
+}
+
+function loadZoneMaskFromStorage() {
+  try {
+    const raw = localStorage.getItem(ZONE_STORAGE_KEY);
+    if (!raw) return defaultZoneMask();
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length === ZONE_TOTAL) {
+      return parsed.map(v => !!v);
+    }
+  } catch {}
+  return defaultZoneMask();
+}
+
+function saveZoneMaskToStorage(mask) {
+  try { localStorage.setItem(ZONE_STORAGE_KEY, JSON.stringify(mask)); } catch {}
+}
+
+function ensureMonitorZoneMask() {
+  if (!zoneMaskMonitor) zoneMaskMonitor = loadZoneMaskFromStorage();
+  return zoneMaskMonitor;
+}
+
+function sendZoneMaskToCamera() {
+  const mask = ensureMonitorZoneMask();
+  sendCtrl({ action: 'zone_mask', cols: ZONE_COLS, rows: ZONE_ROWS, mask });
+}
+
 // Only true ultra-wide / 0.5x lenses should be marked 'wide'. iOS labels
 // like "Back Dual Wide Camera" refer to the *main* back camera, NOT the
 // ultra-wide lens, so a bare "wide" match would misclassify it.
@@ -386,10 +448,16 @@ async function startCamera() {
     // Enumerate cameras after permission is granted (so labels are populated).
     availableCameras = await enumerateCamerasClassified();
 
-    // Start motion detection on local preview.
+    // Start motion detection on local preview. Mask (if any) is supplied by
+    // the monitor over the data channel — we read it each tick.
     motionStop = startMotionDetection(camVideo, () => {
       sendCtrl({ action: 'motion', ts: Date.now() });
-    }, { fps: 6, cooldownMs: 8000, threshold: 18000 });
+    }, {
+      fps: 6,
+      cooldownMs: 8000,
+      threshold: 18000,
+      getMask: () => zoneMaskCamera
+    });
 
     pc = new RTCPeerConnection(rtcConfig);
 
@@ -496,6 +564,17 @@ async function onCameraCtrl(ev) {
     try { await switchCameraTo(msg.id); }
     catch (err) { log('switch failed', err); }
   }
+
+  if (msg.action === 'zone_mask' && Array.isArray(msg.mask) && msg.cols && msg.rows) {
+    if (msg.mask.length === msg.cols * msg.rows) {
+      zoneMaskCamera = {
+        cols: msg.cols,
+        rows: msg.rows,
+        mask: msg.mask.map(v => !!v)
+      };
+      log('Camera received zone mask', zoneMaskCamera);
+    }
+  }
 }
 
 async function switchCameraTo(deviceId) {
@@ -540,7 +619,12 @@ async function switchCameraTo(deviceId) {
   try { if (motionStop) motionStop(); } catch {}
   motionStop = startMotionDetection(camVideo, () => {
     sendCtrl({ action: 'motion', ts: Date.now() });
-  }, { fps: 6, cooldownMs: 8000, threshold: 18000 });
+  }, {
+    fps: 6,
+    cooldownMs: 8000,
+    threshold: 18000,
+    getMask: () => zoneMaskCamera
+  });
 }
 
 function sendCtrl(msg) {
@@ -558,9 +642,10 @@ function sendCtrl(msg) {
 // Ported from video-monitor-app reference.
 // =========================================================
 function startMotionDetection(videoEl, onMotion, opts = {}) {
-  const fps        = opts.fps        ?? 6;
-  const cooldownMs = opts.cooldownMs ?? 8000;
-  const threshold  = opts.threshold  ?? 18000;
+  const fps           = opts.fps        ?? 6;
+  const cooldownMs    = opts.cooldownMs ?? 8000;
+  const baseThreshold = opts.threshold  ?? 18000;
+  const getMask       = opts.getMask; // () => {cols, rows, mask} | null
 
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -579,11 +664,49 @@ function startMotionDetection(videoEl, onMotion, opts = {}) {
     try { frame = ctx.getImageData(0, 0, w, h).data; } catch { return; }
 
     if (last) {
+      const maskInfo = typeof getMask === 'function' ? getMask() : null;
+      const mask = maskInfo && maskInfo.mask;
+      const cols = (mask && maskInfo.cols) || 0;
+      const rows = (mask && maskInfo.rows) || 0;
+      const total = cols * rows;
+
       let diff = 0;
-      for (let i = 0; i < frame.length; i += 4) {
-        diff += Math.abs(frame[i] - last[i]);
+      let activeCells = total;
+
+      if (!mask || !total || mask.length !== total) {
+        // Fast path: no mask / malformed — count all pixels
+        for (let i = 0; i < frame.length; i += 4) diff += Math.abs(frame[i] - last[i]);
+        activeCells = 1; // no scaling
+      } else {
+        activeCells = 0;
+        for (let c = 0; c < total; c++) if (mask[c]) activeCells++;
+        if (activeCells === 0) { last = frame; return; }
+
+        // If every cell is active, fast path.
+        if (activeCells === total) {
+          for (let i = 0; i < frame.length; i += 4) diff += Math.abs(frame[i] - last[i]);
+        } else {
+          const cellW = w / cols;
+          const cellH = h / rows;
+          for (let y = 0; y < h; y++) {
+            const r = (y / cellH) | 0;
+            const rowOff = r * cols;
+            for (let x = 0; x < w; x++) {
+              const c = (x / cellW) | 0;
+              if (!mask[rowOff + c]) continue;
+              const i = (y * w + x) * 4;
+              diff += Math.abs(frame[i] - last[i]);
+            }
+          }
+        }
       }
-      if (diff > threshold && (Date.now() - lastAlert) > cooldownMs) {
+
+      // Scale threshold proportional to the active-cell fraction so that
+      // masking a fan (say) doesn't make the remaining area hyper-sensitive.
+      const frac = mask && total ? (activeCells / total) : 1;
+      const adjThreshold = baseThreshold * Math.max(0.08, frac);
+
+      if (diff > adjThreshold && (Date.now() - lastAlert) > cooldownMs) {
         lastAlert = Date.now();
         try { onMotion(); } catch (e) { log('motion cb err', e); }
       }
@@ -712,8 +835,11 @@ async function createAnswerFromOffer(offer, roomCode) {
       dataChannel.onopen = () => {
         log('Monitor DC open');
         startPinging();
-        // Ask camera about available lenses.
-        setTimeout(() => sendCtrl({ action: 'request_cameras' }), 150);
+        // Ask camera about available lenses, and push the current zone mask.
+        setTimeout(() => {
+          sendCtrl({ action: 'request_cameras' });
+          sendZoneMaskToCamera();
+        }, 150);
       };
       dataChannel.onmessage = (e) => onMonitorCtrl(e);
       dataChannel.onclose = () => log('Monitor DC close');
@@ -722,14 +848,17 @@ async function createAnswerFromOffer(offer, roomCode) {
 
     pc.onconnectionstatechange = () => {
       log('Monitor PC state', pc.connectionState);
-      if ((pc.connectionState === 'connected' || pc.connectionState === 'completed') &&
+      const s = pc.connectionState;
+      if ((s === 'connected' || s === 'completed') &&
           dataChannel && dataChannel.readyState === 'open') {
         enableLiveControls();
         hideLiveOverlay();
         stopPinging();
-      } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-        showLiveOverlay('Connection lost');
+        wasEverConnected = true;
+        clearConnectionLost();
+      } else if (s === 'failed' || s === 'disconnected') {
         setSignalStrength(0);
+        if (wasEverConnected) triggerConnectionLost();
       }
     };
 
@@ -742,8 +871,11 @@ async function createAnswerFromOffer(offer, roomCode) {
       if (s === 'connected' || s === 'completed') {
         hideLiveOverlay();
         if (!statsTimer) startStatsPolling();
+        wasEverConnected = true;
+        clearConnectionLost();
       } else if (s === 'failed' || s === 'disconnected') {
         setSignalStrength(0);
+        if (wasEverConnected) triggerConnectionLost();
       }
     };
 
@@ -909,6 +1041,110 @@ function startStatsPolling() {
 }
 
 // =========================================================
+// Motion zones screen (monitor)
+// =========================================================
+function openMotionZones() {
+  // Only meaningful from the Live screen.
+  if (nav.current() !== 'screen-live') return;
+  ensureMonitorZoneMask();
+  nav.push('screen-motion-zones', () => {
+    // Working copy so Cancel (via back) can discard edits.
+    zoneEditing = zoneMaskMonitor.slice();
+
+    const zv  = document.getElementById('zoneVideo');
+    const mv  = document.getElementById('monitorVideo');
+    if (zv && mv && mv.srcObject) {
+      try { zv.srcObject = mv.srcObject; } catch {}
+      zv.play().catch(() => {});
+    }
+
+    renderZoneGrid();
+    fitZoneOverlay();
+    // Re-fit after video metadata arrives (sizes based on native aspect).
+    if (zv) {
+      const onMeta = () => { fitZoneOverlay(); zv.removeEventListener('loadedmetadata', onMeta); };
+      zv.addEventListener('loadedmetadata', onMeta);
+    }
+    window.addEventListener('resize', fitZoneOverlay);
+  });
+}
+
+function teardownZonesScreen() {
+  window.removeEventListener('resize', fitZoneOverlay);
+  const zv = document.getElementById('zoneVideo');
+  if (zv) { try { zv.pause(); } catch {} zv.srcObject = null; }
+  zoneEditing = null;
+}
+
+function fitZoneOverlay() {
+  const zv = document.getElementById('zoneVideo');
+  const overlay = document.getElementById('zoneGrid');
+  if (!zv || !overlay) return;
+  const container = zv.parentElement;
+  if (!container) return;
+  const cw = container.clientWidth;
+  const ch = container.clientHeight;
+  if (!cw || !ch) return;
+
+  const vw = zv.videoWidth || 0;
+  const vh = zv.videoHeight || 0;
+  let w, h, left, top;
+  if (vw && vh) {
+    const va = vw / vh;
+    const ca = cw / ch;
+    if (va > ca) { w = cw; h = cw / va; }
+    else         { h = ch; w = ch * va; }
+    left = (cw - w) / 2;
+    top  = (ch - h) / 2;
+  } else {
+    // Metadata not yet available — cover full container.
+    w = cw; h = ch; left = 0; top = 0;
+  }
+  overlay.style.width  = w + 'px';
+  overlay.style.height = h + 'px';
+  overlay.style.left   = left + 'px';
+  overlay.style.top    = top  + 'px';
+}
+
+function renderZoneGrid() {
+  const grid = document.getElementById('zoneGrid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  const mask = zoneEditing || ensureMonitorZoneMask();
+  for (let i = 0; i < ZONE_TOTAL; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'zone-cell' + (mask[i] ? '' : ' disabled');
+    cell.setAttribute('data-index', String(i));
+    cell.addEventListener('click', () => toggleZoneCell(i));
+    grid.appendChild(cell);
+  }
+}
+
+function toggleZoneCell(i) {
+  if (!zoneEditing) return;
+  zoneEditing[i] = !zoneEditing[i];
+  const grid = document.getElementById('zoneGrid');
+  if (!grid) return;
+  const cell = grid.children[i];
+  if (cell) cell.classList.toggle('disabled', !zoneEditing[i]);
+}
+
+function resetMotionZones() {
+  zoneEditing = defaultZoneMask();
+  renderZoneGrid();
+}
+
+function saveMotionZones() {
+  if (zoneEditing) {
+    zoneMaskMonitor = zoneEditing.slice();
+    saveZoneMaskToStorage(zoneMaskMonitor);
+    sendZoneMaskToCamera();
+  }
+  // Pop back to Live (history back preserves session via popstate guard).
+  if (nav.current() === 'screen-motion-zones') history.back();
+}
+
+// =========================================================
 // Motion alert (monitor): green flash + chip + short beep
 // =========================================================
 function triggerMotionAlert() {
@@ -930,33 +1166,82 @@ function triggerMotionAlert() {
   try { playNotificationBeep(); } catch {}
 }
 
-function playNotificationBeep() {
+function ensureNotifyCtx() {
   if (!notifyCtx) {
     try {
       notifyCtx = new (window.AudioContext || window.webkitAudioContext)();
-    } catch { return; }
+    } catch { return null; }
   }
   if (notifyCtx.state === 'suspended') {
     notifyCtx.resume().catch(() => {});
   }
-  const ctx2 = notifyCtx;
-  const now = ctx2.currentTime;
+  return notifyCtx;
+}
 
-  // Two short pings — musical, not jarring.
-  const makePing = (freq, startOffset) => {
-    const osc = ctx2.createOscillator();
-    const g = ctx2.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = freq;
-    g.gain.setValueAtTime(0, now + startOffset);
-    g.gain.linearRampToValueAtTime(0.22, now + startOffset + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + startOffset + 0.35);
-    osc.connect(g).connect(ctx2.destination);
-    osc.start(now + startOffset);
-    osc.stop(now + startOffset + 0.4);
-  };
-  makePing(880, 0);
-  makePing(1320, 0.14);
+// Primitive: schedule a single beep on the notify context.
+// duration is attack→release; peak holds until ~80% of duration.
+function makeBeep(ctx2, freq, startOffset, duration, volume = 0.22, type = 'sine') {
+  const osc = ctx2.createOscillator();
+  const g   = ctx2.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  const t0 = ctx2.currentTime + startOffset;
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(volume, t0 + Math.min(0.02, duration * 0.2));
+  g.gain.setValueAtTime(volume, t0 + duration * 0.75);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+  osc.connect(g).connect(ctx2.destination);
+  osc.start(t0);
+  osc.stop(t0 + duration + 0.02);
+}
+
+// Motion alert — noticeable 4-tone ascending chirp.
+function playNotificationBeep() {
+  const ctx2 = ensureNotifyCtx();
+  if (!ctx2) return;
+  // Ascending: G5, B5, D6, E6
+  makeBeep(ctx2, 784,  0.00, 0.14, 0.22);
+  makeBeep(ctx2, 988,  0.13, 0.14, 0.22);
+  makeBeep(ctx2, 1175, 0.26, 0.14, 0.22);
+  makeBeep(ctx2, 1319, 0.39, 0.22, 0.25);
+}
+
+// Connection-lost alarm — plays a short 3-tone pattern. Called repeatedly
+// by startConnectionLostBeep.
+function playConnectionLostBeep() {
+  const ctx2 = ensureNotifyCtx();
+  if (!ctx2) return;
+  // Two short alternating tones + descending resolve — deliberately more
+  // urgent than the motion chirp.
+  makeBeep(ctx2, 660, 0.00, 0.18, 0.28, 'square');
+  makeBeep(ctx2, 880, 0.22, 0.18, 0.28, 'square');
+  makeBeep(ctx2, 523, 0.46, 0.30, 0.26, 'sine');
+}
+
+function startConnectionLostBeep() {
+  if (connLostTimer) return;
+  // Fire immediately, then repeat every ~1.5s.
+  try { playConnectionLostBeep(); } catch {}
+  connLostTimer = setInterval(() => {
+    try { playConnectionLostBeep(); } catch {}
+  }, 1500);
+}
+
+function stopConnectionLostBeep() {
+  if (connLostTimer) { try { clearInterval(connLostTimer); } catch {} connLostTimer = null; }
+}
+
+function triggerConnectionLost() {
+  const vid = document.querySelector('#screen-live .live-video');
+  if (vid) vid.classList.add('connection-lost');
+  showLiveOverlay('Connection lost — reconnecting…');
+  startConnectionLostBeep();
+}
+
+function clearConnectionLost() {
+  const vid = document.querySelector('#screen-live .live-video');
+  if (vid) vid.classList.remove('connection-lost');
+  stopConnectionLostBeep();
 }
 
 // =========================================================
