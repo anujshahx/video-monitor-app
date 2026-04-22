@@ -132,8 +132,39 @@ body {
   white-space: nowrap;
 }
 
-.app-bar-side        { min-width: 80px; display: flex; align-items: center; }
+.app-bar-side        { min-width: 80px; display: flex; align-items: center; gap: 8px; }
 .app-bar-side-right  { justify-content: flex-end; padding-right: 8px; }
+
+.app-bar-action {
+  background: transparent;
+  border: 0;
+  padding: 6px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  transition: background .15s ease, color .15s ease;
+}
+.app-bar-action:hover  { background: var(--surface-3); color: var(--text); }
+.app-bar-action:active { background: var(--accent-bg); color: var(--accent); }
+
+.app-bar-done {
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.app-bar-done:hover  { background: var(--accent-bg); }
+.app-bar-done:active { background: color-mix(in oklab, var(--accent-bg) 70%, var(--accent) 30%); }
 
 .app-bar-back {
   background: transparent;
@@ -381,8 +412,9 @@ body {
 .video-frame video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
+  background: #000;
 }
 
 .video-frame-portrait {
@@ -520,10 +552,14 @@ body {
   aspect-ratio: auto;
 }
 
+/* `contain` preserves the camera's full sensor FOV and lets the black
+   video container act as a clean letterbox. `cover` would crop the sides,
+   which is undesirable when the whole point of switching to the wide
+   lens is to see more of the room. */
 .live-video video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
   background: #000;
 }
@@ -599,6 +635,26 @@ body {
   65% { opacity: 1; }
   20%,
   50% { opacity: 0; }
+}
+
+/* =========================================================
+   Connection lost — steady red tint over live video (no flash)
+   ========================================================= */
+.live-video.connection-lost::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(220, 38, 38, 0.38);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.live-video.connection-lost .video-overlay {
+  background: rgba(120, 14, 20, 0.55);
+  color: #fff;
+  font-weight: 600;
+  letter-spacing: .02em;
+  z-index: 5;
 }
 
 /* =========================================================
@@ -703,6 +759,107 @@ body {
   opacity: .55;
   cursor: not-allowed;
 }
+
+/* =========================================================
+   Motion zones screen
+   ========================================================= */
+.zones-body {
+  padding: 12px 12px calc(14px + var(--safe-bottom));
+  padding-left: calc(12px + var(--safe-left));
+  padding-right: calc(12px + var(--safe-right));
+  gap: 10px;
+}
+
+.zones-intro {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.45;
+  padding: 0 4px;
+}
+
+.zones-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  width: 100%;
+  background: #000;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-sm);
+}
+
+.zones-video-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zones-video-wrap video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: #000;
+}
+
+.zones-grid {
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  pointer-events: auto;
+  z-index: 3;
+}
+
+.zone-cell {
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: transparent;
+  transition: background .12s ease, border-color .12s ease;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  position: relative;
+}
+
+.zone-cell.disabled {
+  background: rgba(0, 0, 0, 0.62);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.zone-cell.disabled::after {
+  content: "";
+  position: absolute;
+  inset: 28%;
+  border-radius: 50%;
+  background: rgba(220, 38, 38, 0.55);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.2);
+}
+
+.zones-actions {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 0;
+}
+
+.btn-ghost {
+  width: auto;
+  padding: 10px 18px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  font-size: 14px;
+  font-weight: 600;
+}
+.btn-ghost:hover:not(:disabled)  { background: var(--surface-2); }
+.btn-ghost:active:not(:disabled) { background: var(--surface-3); }
 
 /* =========================================================
    Wide-screen phone frame
