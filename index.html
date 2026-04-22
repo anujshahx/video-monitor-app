@@ -144,14 +144,6 @@
         </button>
         <div class="app-bar-title">Live</div>
         <div class="app-bar-side app-bar-side-right">
-          <button class="app-bar-action" type="button" onclick="openMotionZones()" aria-label="Motion zones">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true">
-              <rect x="3" y="3" width="7" height="7" rx="1"></rect>
-              <rect x="14" y="3" width="7" height="7" rx="1"></rect>
-              <rect x="3" y="14" width="7" height="7" rx="1"></rect>
-              <rect x="14" y="14" width="7" height="7" rx="1"></rect>
-            </svg>
-          </button>
           <span id="signalBars" class="signal-bars" data-strength="0" title="Signal strength" aria-label="Signal strength">
             <span class="signal-bar"></span>
             <span class="signal-bar"></span>
@@ -177,6 +169,33 @@
               <path d="M19 11a1 1 0 0 0-2 0 5 5 0 0 1-10 0 1 1 0 0 0-2 0 7 7 0 0 0 6 6.92V21a1 1 0 0 0 2 0v-3.08A7 7 0 0 0 19 11z"/>
             </svg>
           </button>
+
+          <button id="motionFab" class="motion-fab" type="button" aria-label="Motion detection settings"
+                  onclick="openZonesOverlay()">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="7" rx="1"></rect>
+              <rect x="14" y="3" width="7" height="7" rx="1"></rect>
+              <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+              <rect x="14" y="14" width="7" height="7" rx="1"></rect>
+            </svg>
+          </button>
+
+          <div id="zonesOverlay" class="zones-overlay hidden" aria-hidden="true">
+            <div class="zones-header">
+              <button class="zones-close" type="button" aria-label="Close" onclick="closeZonesOverlay()">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                  <path d="M18.3 5.71a1 1 0 0 0-1.41 0L12 10.59 7.11 5.7A1 1 0 1 0 5.7 7.11L10.59 12 5.7 16.89a1 1 0 1 0 1.41 1.41L12 13.41l4.89 4.89a1 1 0 0 0 1.41-1.41L13.41 12l4.89-4.89a1 1 0 0 0 0-1.4z"/>
+                </svg>
+              </button>
+              <div class="zones-title">Motion Detection</div>
+              <label class="switch" aria-label="Enable motion detection">
+                <input type="checkbox" id="motionToggle" onchange="onMotionToggle(this.checked)">
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+            <div id="zoneGrid" class="zones-grid" aria-label="Select areas to track motion"></div>
+            <div id="zonesHint" class="zones-hint">Tap cells to mark where to watch for motion (e.g. over the crib).</div>
+          </div>
         </div>
 
         <div class="live-dock">
@@ -196,37 +215,6 @@
               <option value="">—</option>
             </select>
           </label>
-        </div>
-      </main>
-    </section>
-
-    <!-- ============ MOTION ZONES ============ -->
-    <section class="screen" id="screen-motion-zones">
-      <header class="app-bar">
-        <button class="app-bar-back" onclick="goBack()" aria-label="Back">
-          <span class="chev-back" aria-hidden="true">‹</span>
-          <span>Live</span>
-        </button>
-        <div class="app-bar-title">Motion Zones</div>
-        <div class="app-bar-side app-bar-side-right">
-          <button id="zoneDoneBtn" class="app-bar-done" type="button" onclick="saveMotionZones()">Done</button>
-        </div>
-      </header>
-
-      <main class="screen-body zones-body">
-        <div class="zones-intro">
-          Tap areas to exclude them from motion detection. Greyed cells are ignored (e.g., a fan).
-        </div>
-
-        <div class="zones-stage">
-          <div class="zones-video-wrap">
-            <video id="zoneVideo" autoplay playsinline muted></video>
-            <div id="zoneGrid" class="zones-grid" aria-label="Motion detection zones"></div>
-          </div>
-        </div>
-
-        <div class="zones-actions">
-          <button class="btn btn-ghost" type="button" onclick="resetMotionZones()">Reset all</button>
         </div>
       </main>
     </section>
