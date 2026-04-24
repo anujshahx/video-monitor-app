@@ -776,9 +776,11 @@ body {
   z-index: 7;
   display: flex;
   flex-direction: column;
-  background: rgba(8, 10, 20, 0.55);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  /* Lightened tint + softer blur so the live camera preview stays legible
+     through the overlay while the user is selecting zones. */
+  background: rgba(8, 10, 20, 0.30);
+  backdrop-filter: blur(1.6px);
+  -webkit-backdrop-filter: blur(1.6px);
   transition: opacity .18s ease;
   /* Match the live-video frame's rounded corners. Some browsers don't
      clip backdrop-filter children against an ancestor's border-radius,
