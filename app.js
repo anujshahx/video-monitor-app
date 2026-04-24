@@ -475,7 +475,9 @@ async function startCamera() {
     }, {
       fps: 6,
       cooldownMs: 8000,
-      threshold: 18000,
+      perPixelDelta:   25,    // ignore per-pixel jitter below this (0..255)
+      minAreaFrac:     0.02,  // require 2% of tracked pixels to have moved
+      sustainedFrames: 2,     // ...and for 2 consecutive frames
       getMask:    () => zoneMaskCamera,
       getEnabled: () => motionEnabledCamera
     });
@@ -647,7 +649,9 @@ async function switchCameraTo(deviceId) {
   }, {
     fps: 6,
     cooldownMs: 8000,
-    threshold: 18000,
+    perPixelDelta:   25,
+    minAreaFrac:     0.02,
+    sustainedFrames: 2,
     getMask:    () => zoneMaskCamera,
     getEnabled: () => motionEnabledCamera
   });
@@ -667,23 +671,45 @@ function sendCtrl(msg) {
 // Motion detection (canvas frame diff)
 // Ported from video-monitor-app reference.
 // =========================================================
+// Motion detection: downscales the camera frame to 160×120, then — within
+// the user-selected zones — classifies each pixel as "changed" or "not
+// changed" based on how much its red-channel brightness moved since the last
+// frame. A motion alert fires only when a large enough AREA of tracked
+// pixels changes AND that change persists across multiple consecutive
+// frames. This rejects two major false-positive sources:
+//
+//   1. Sensor / IR noise — tiny per-pixel flickers are filtered out by
+//      `perPixelDelta` (small brightness jitter doesn't count).
+//   2. Breathing — a sleeping chest moves a small region with subtle
+//      brightness change. Even if some pixels squeak past the per-pixel
+//      threshold, the moved AREA is well under `minAreaFrac` (2% of
+//      tracked pixels), so no alert.
+//
+// Real motion (arm fling, head turn, sitting up) lights up hundreds-to-
+// thousands of pixels across a wide region, easily clears the area gate,
+// and stays above it for more than one frame — so it fires reliably.
 function startMotionDetection(videoEl, onMotion, opts = {}) {
-  const fps           = opts.fps        ?? 6;
-  const cooldownMs    = opts.cooldownMs ?? 8000;
-  const baseThreshold = opts.threshold  ?? 18000;
-  const getMask       = opts.getMask; // () => {cols, rows, mask} | null
+  const fps             = opts.fps             ?? 6;
+  const cooldownMs      = opts.cooldownMs      ?? 8000;
+  const perPixelDelta   = opts.perPixelDelta   ?? 25;    // 0..255 red-channel delta
+  const minAreaFrac     = opts.minAreaFrac     ?? 0.02;  // 2% of tracked pixels
+  const sustainedFrames = opts.sustainedFrames ?? 2;     // must hold this many frames
+  const getMask         = opts.getMask;
 
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   let last = null;
   let lastAlert = 0;
+  let hotStreak = 0;                   // consecutive frames above area gate
   const interval = Math.max(80, Math.floor(1000 / fps));
 
   const handle = setInterval(() => {
-    // Honor global enable flag — if disabled, skip entirely (still keep
-    // `last` fresh so we don't trigger a false-positive when re-enabled).
+    // Honor global enable flag — if disabled, skip entirely and reset
+    // running state so we don't carry forward a stale `last` frame or
+    // half-completed streak when re-enabled.
     if (typeof opts.getEnabled === 'function' && !opts.getEnabled()) {
       last = null;
+      hotStreak = 0;
       return;
     }
     if (!videoEl || !videoEl.videoWidth || videoEl.readyState < 2) return;
@@ -702,23 +728,30 @@ function startMotionDetection(videoEl, onMotion, opts = {}) {
       const rows = (mask && maskInfo.rows) || 0;
       const total = cols * rows;
 
-      let diff = 0;
-      let activeCells = total;
+      let trackedPixels = 0;
+      let changedPixels = 0;
 
       if (!mask || !total || mask.length !== total) {
-        // Fast path: no mask / malformed — count all pixels
-        for (let i = 0; i < frame.length; i += 4) diff += Math.abs(frame[i] - last[i]);
-        activeCells = 1; // no scaling
+        // Fast path: no mask / malformed — evaluate every pixel.
+        trackedPixels = w * h;
+        for (let i = 0; i < frame.length; i += 4) {
+          const d = frame[i] - last[i];
+          if (d > perPixelDelta || d < -perPixelDelta) changedPixels++;
+        }
       } else {
-        activeCells = 0;
+        let activeCells = 0;
         for (let c = 0; c < total; c++) if (mask[c]) activeCells++;
         // mask[i] === true means "track this cell". If user selected 0
         // cells we have nothing to track, so bail without alerting.
-        if (activeCells === 0) { last = frame; return; }
+        if (activeCells === 0) { last = frame; hotStreak = 0; return; }
 
-        // If every cell is active, fast path.
         if (activeCells === total) {
-          for (let i = 0; i < frame.length; i += 4) diff += Math.abs(frame[i] - last[i]);
+          // Fast path: all cells selected.
+          trackedPixels = w * h;
+          for (let i = 0; i < frame.length; i += 4) {
+            const d = frame[i] - last[i];
+            if (d > perPixelDelta || d < -perPixelDelta) changedPixels++;
+          }
         } else {
           const cellW = w / cols;
           const cellH = h / rows;
@@ -728,21 +761,26 @@ function startMotionDetection(videoEl, onMotion, opts = {}) {
             for (let x = 0; x < w; x++) {
               const c = (x / cellW) | 0;
               if (!mask[rowOff + c]) continue;
+              trackedPixels++;
               const i = (y * w + x) * 4;
-              diff += Math.abs(frame[i] - last[i]);
+              const d = frame[i] - last[i];
+              if (d > perPixelDelta || d < -perPixelDelta) changedPixels++;
             }
           }
         }
       }
 
-      // Scale threshold proportional to tracked-cell fraction so that
-      // shrinking the tracked area doesn't make it hyper-sensitive.
-      const frac = mask && total ? (activeCells / total) : 1;
-      const adjThreshold = baseThreshold * Math.max(0.08, frac);
+      const frac = trackedPixels > 0 ? (changedPixels / trackedPixels) : 0;
 
-      if (diff > adjThreshold && (Date.now() - lastAlert) > cooldownMs) {
-        lastAlert = Date.now();
-        try { onMotion(); } catch (e) { log('motion cb err', e); }
+      if (frac >= minAreaFrac) {
+        hotStreak++;
+        if (hotStreak >= sustainedFrames && (Date.now() - lastAlert) > cooldownMs) {
+          lastAlert = Date.now();
+          hotStreak = 0;
+          try { onMotion(); } catch (e) { log('motion cb err', e); }
+        }
+      } else {
+        hotStreak = 0;
       }
     }
     last = frame;
