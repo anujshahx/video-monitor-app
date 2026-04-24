@@ -63,6 +63,7 @@ let zoneMaskMonitor = null;         // Array<boolean> length 48 on monitor
 let motionEnabledMonitor = null;    // boolean on monitor
 let zoneMaskCamera = null;          // { cols, rows, mask } on camera (received)
 let motionEnabledCamera = true;     // boolean on camera (received; default true)
+let motionSuspendedCamera = false;  // transient: true while monitor has zones overlay open
 
 // Camera-side audio (sounds)
 let audioCtx = null;
@@ -479,7 +480,7 @@ async function startCamera() {
       minAreaFrac:     0.02,  // require 2% of tracked pixels to have moved
       sustainedFrames: 2,     // ...and for 2 consecutive frames
       getMask:    () => zoneMaskCamera,
-      getEnabled: () => motionEnabledCamera
+      getEnabled: () => motionEnabledCamera && !motionSuspendedCamera
     });
 
     pc = new RTCPeerConnection(rtcConfig);
@@ -602,6 +603,15 @@ async function onCameraCtrl(ev) {
     }
     log('Camera motion_config', { enabled: motionEnabledCamera, mask: zoneMaskCamera });
   }
+
+  // Transient pause while the monitor has its zones overlay open. Keeps the
+  // detection loop from firing spurious alerts while the user is painting
+  // zones; getEnabled() resets `last` + `hotStreak` so there's no stale-
+  // frame false-positive when we resume.
+  if (msg.action === 'motion_suspend') {
+    motionSuspendedCamera = !!msg.suspended;
+    log('Camera motion_suspend', { suspended: motionSuspendedCamera });
+  }
 }
 
 async function switchCameraTo(deviceId) {
@@ -653,7 +663,7 @@ async function switchCameraTo(deviceId) {
     minAreaFrac:     0.02,
     sustainedFrames: 2,
     getMask:    () => zoneMaskCamera,
-    getEnabled: () => motionEnabledCamera
+    getEnabled: () => motionEnabledCamera && !motionSuspendedCamera
   });
 }
 
@@ -714,7 +724,11 @@ function startMotionDetection(videoEl, onMotion, opts = {}) {
     }
     if (!videoEl || !videoEl.videoWidth || videoEl.readyState < 2) return;
 
-    const w = 160, h = 120;
+    // 120×90 = 10 800 pixels — 56% of the old 160×120 budget. At 6 fps
+    // that's roughly 65 k pixel ops/s per pass instead of 115 k, and the
+    // spatial averaging from the lower resolution also reduces sensor-
+    // noise jitter, so detection gets *more* stable, not less.
+    const w = 120, h = 90;
     canvas.width = w; canvas.height = h;
     try { ctx.drawImage(videoEl, 0, 0, w, h); } catch { return; }
 
@@ -1165,6 +1179,10 @@ function openZonesOverlay() {
 
   overlay.classList.remove('hidden');
   overlay.setAttribute('aria-hidden', 'false');
+
+  // Tell the camera to pause detection — avoids spurious alerts firing
+  // while the user is painting zones and keeps the UI responsive.
+  try { sendCtrl({ action: 'motion_suspend', suspended: true }); } catch {}
 }
 
 function closeZonesOverlay() {
@@ -1172,6 +1190,10 @@ function closeZonesOverlay() {
   if (!overlay) return;
   overlay.classList.add('hidden');
   overlay.setAttribute('aria-hidden', 'true');
+
+  // Resume detection. The camera will reset its frame-diff baseline, so
+  // the first frame after resume won't trigger a false positive.
+  try { sendCtrl({ action: 'motion_suspend', suspended: false }); } catch {}
 }
 
 function applyMotionEnabledUi() {
