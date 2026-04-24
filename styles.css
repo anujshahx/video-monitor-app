@@ -130,6 +130,8 @@ body {
   color: var(--text);
   text-align: center;
   white-space: nowrap;
+  /* Keeps digit widths identical when the Live timer ticks. */
+  font-variant-numeric: tabular-nums;
 }
 
 .app-bar-side        { min-width: 80px; display: flex; align-items: center; }
