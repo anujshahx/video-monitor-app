@@ -50,6 +50,8 @@ let statsTimer = null;             // signal strength polling
 let notifyCtx = null;              // audio ctx for short beep on motion
 let connLostTimer = null;          // interval id for repeating alarm beep
 let wasEverConnected = false;      // so we don't alert on initial connect phase
+let liveTimerStartMs = 0;          // 0 when stopped; epoch ms when running
+let liveTimerInterval = null;      // setInterval id for the HH:MM:SS ticker
 
 // Motion detection settings (monitor is source of truth; camera mirrors)
 // Semantics: `mask[i] === true` means "TRACK this cell for motion".
@@ -275,6 +277,8 @@ function teardownSession() {
 
   availableCameras = [];
   activeCameraId = null;
+
+  stopLiveTimer();
 
   if (currentRoomCode) {
     try { db.ref('rooms/' + currentRoomCode).remove(); } catch {}
@@ -972,6 +976,7 @@ async function createAnswerFromOffer(offer, roomCode) {
         stopPinging();
         wasEverConnected = true;
         clearConnectionLost();
+        startLiveTimer();
       } else if (s === 'failed' || s === 'disconnected') {
         setSignalStrength(0);
         if (wasEverConnected) triggerConnectionLost();
@@ -989,6 +994,7 @@ async function createAnswerFromOffer(offer, roomCode) {
         if (!statsTimer) startStatsPolling();
         wasEverConnected = true;
         clearConnectionLost();
+        startLiveTimer();
       } else if (s === 'failed' || s === 'disconnected') {
         setSignalStrength(0);
         if (wasEverConnected) triggerConnectionLost();
@@ -1504,6 +1510,43 @@ function startPinging() {
   }, 800);
 }
 function stopPinging() { if (pingTimer) { clearInterval(pingTimer); pingTimer = null; } }
+
+// =========================================================
+// Live elapsed timer (HH:MM:SS) — shown in the app-bar title
+// =========================================================
+function formatElapsed(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n) => (n < 10 ? '0' + n : '' + n);
+  return pad(h) + ':' + pad(m) + ':' + pad(s);
+}
+
+function renderLiveTimer() {
+  const el = document.getElementById('liveAppBarTitle');
+  if (!el) return;
+  if (!liveTimerStartMs) {
+    el.textContent = 'Live';
+    return;
+  }
+  el.textContent = formatElapsed(Date.now() - liveTimerStartMs);
+}
+
+// Idempotent: safe to call from multiple "connected" event paths
+// (connectionState and iceConnectionState both fire on iOS Safari).
+function startLiveTimer() {
+  if (liveTimerInterval) return;
+  liveTimerStartMs = Date.now();
+  renderLiveTimer();
+  liveTimerInterval = setInterval(renderLiveTimer, 1000);
+}
+
+function stopLiveTimer() {
+  if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
+  liveTimerStartMs = 0;
+  renderLiveTimer();
+}
 
 // Enable Sound dropdown once camera is ready.
 function enableLiveControls() {
