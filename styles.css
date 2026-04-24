@@ -527,8 +527,12 @@ body {
 
 /* `cover` fills the live frame with no black bars. We trade a little
    horizontal FOV for a full-bleed picture — the wide lens still shows
-   substantially more than the standard lens even after the crop. */
+   substantially more than the standard lens even after the crop.
+   Absolute positioning is required because iOS Safari does not reliably
+   stretch a flex-sized video element via `height: 100%` alone. */
 .live-video video {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -829,6 +833,9 @@ body {
   border-radius: 8px;
   overflow: hidden;
   transition: opacity .18s ease;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .zones-grid.hidden {
   opacity: 0;
