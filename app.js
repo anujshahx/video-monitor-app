@@ -730,12 +730,25 @@ function startMotionDetection(videoEl, onMotion, opts = {}) {
 
       let trackedPixels = 0;
       let changedPixels = 0;
+      // Global-mean-shift correction: we make TWO passes over the tracked
+      // pixels. Pass 1 computes the mean red-channel delta — this is the
+      // frame-wide brightness drift from autoexposure, lighting changes,
+      // or IR gain. Pass 2 subtracts that drift from each pixel's delta
+      // before thresholding, so only pixels that moved *relative to the
+      // rest of the frame* count as real motion. A uniform brightness
+      // jump across the whole frame produces a mean ≈ each pixel's delta,
+      // so the corrected delta is ≈ 0 and nothing counts. A hand waving
+      // produces an outlier cluster whose deltas dwarf the mean, so they
+      // still count.
+      let deltaSum = 0;
 
       if (!mask || !total || mask.length !== total) {
         // Fast path: no mask / malformed — evaluate every pixel.
         trackedPixels = w * h;
+        for (let i = 0; i < frame.length; i += 4) deltaSum += frame[i] - last[i];
+        const meanDelta = deltaSum / trackedPixels;
         for (let i = 0; i < frame.length; i += 4) {
-          const d = frame[i] - last[i];
+          const d = (frame[i] - last[i]) - meanDelta;
           if (d > perPixelDelta || d < -perPixelDelta) changedPixels++;
         }
       } else {
@@ -748,13 +761,17 @@ function startMotionDetection(videoEl, onMotion, opts = {}) {
         if (activeCells === total) {
           // Fast path: all cells selected.
           trackedPixels = w * h;
+          for (let i = 0; i < frame.length; i += 4) deltaSum += frame[i] - last[i];
+          const meanDelta = deltaSum / trackedPixels;
           for (let i = 0; i < frame.length; i += 4) {
-            const d = frame[i] - last[i];
+            const d = (frame[i] - last[i]) - meanDelta;
             if (d > perPixelDelta || d < -perPixelDelta) changedPixels++;
           }
         } else {
           const cellW = w / cols;
           const cellH = h / rows;
+
+          // Pass 1: sum deltas across tracked pixels.
           for (let y = 0; y < h; y++) {
             const r = (y / cellH) | 0;
             const rowOff = r * cols;
@@ -763,7 +780,20 @@ function startMotionDetection(videoEl, onMotion, opts = {}) {
               if (!mask[rowOff + c]) continue;
               trackedPixels++;
               const i = (y * w + x) * 4;
-              const d = frame[i] - last[i];
+              deltaSum += frame[i] - last[i];
+            }
+          }
+          const meanDelta = trackedPixels > 0 ? (deltaSum / trackedPixels) : 0;
+
+          // Pass 2: count pixels whose drift-corrected delta exceeds threshold.
+          for (let y = 0; y < h; y++) {
+            const r = (y / cellH) | 0;
+            const rowOff = r * cols;
+            for (let x = 0; x < w; x++) {
+              const c = (x / cellW) | 0;
+              if (!mask[rowOff + c]) continue;
+              const i = (y * w + x) * 4;
+              const d = (frame[i] - last[i]) - meanDelta;
               if (d > perPixelDelta || d < -perPixelDelta) changedPixels++;
             }
           }
