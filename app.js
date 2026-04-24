@@ -1130,22 +1130,27 @@ function renderZoneGrid() {
   wireZonesDrag(grid);
 }
 
-// Tap + drag-to-paint on the zones grid. The first cell the pointer lands on
+// Tap + drag-to-paint on the zones grid. The first cell the gesture lands on
 // defines the paint direction (select if it was empty, deselect if it was
-// selected). All subsequent cells the pointer enters are set to that same
-// state, so a single gesture can quickly rubber-stamp a row/column.
+// selected). Every cell the finger enters after that is set to the same
+// value, so one gesture can quickly rubber-stamp a row/column.
 //
-// We keep paint state local to this closure and attach handlers once per grid
-// element (guarded by _bmDragWired) so repeated renderZoneGrid() calls don't
-// stack listeners.
+// Why document-level move/up listeners instead of setPointerCapture on the
+// grid: on iOS Safari, pointer events can drop reliability once the finger
+// leaves the original child, even with capture set. Listening on `document`
+// during the gesture is bulletproof. We also register both Pointer and Touch
+// listeners so this works on every mobile browser, and guard against
+// double-dispatch with an `activeGesture` flag.
 function wireZonesDrag(grid) {
   if (!grid || grid._bmDragWired) return;
   grid._bmDragWired = true;
 
-  let painting = false;
-  let paintOn = false;       // the value we're stamping onto cells this gesture
-  let lastIndex = -1;        // cell we most recently touched (dedupe)
-  let dirty = false;         // did this gesture change anything?
+  let active = false;       // gesture in flight?
+  let paintOn = false;      // value we're stamping this gesture
+  let lastIndex = -1;       // last cell we applied (dedupe)
+  let dirty = false;
+  let source = null;        // 'pointer' or 'touch' — ignore events from the other source mid-gesture
+  let pointerId = null;
 
   const cellFromPoint = (x, y) => {
     const el = document.elementFromPoint(x, y);
@@ -1170,42 +1175,24 @@ function wireZonesDrag(grid) {
     dirty = true;
   };
 
-  grid.addEventListener('pointerdown', (ev) => {
-    // Only primary pointer (ignore multi-touch)
-    if (ev.button !== undefined && ev.button !== 0) return;
-
-    const cell = cellFromPoint(ev.clientX, ev.clientY);
-    if (!cell) return;
-
+  const startGesture = (cell) => {
     const idx = parseInt(cell.getAttribute('data-index'), 10);
-    if (!Number.isFinite(idx)) return;
-
+    if (!Number.isFinite(idx)) return false;
     const mask = ensureMonitorZoneMask();
-    // Paint the opposite of the starting cell's current state.
     paintOn = !mask[idx];
-    painting = true;
+    active = true;
     lastIndex = -1;
     dirty = false;
-
-    try { grid.setPointerCapture(ev.pointerId); } catch (_) {}
     applyCell(cell);
+    return true;
+  };
 
-    ev.preventDefault();
-  });
-
-  grid.addEventListener('pointermove', (ev) => {
-    if (!painting) return;
-    const cell = cellFromPoint(ev.clientX, ev.clientY);
-    if (cell) applyCell(cell);
-  });
-
-  const endGesture = (ev) => {
-    if (!painting) return;
-    painting = false;
+  const endGesture = () => {
+    if (!active) return;
+    active = false;
+    source = null;
+    pointerId = null;
     lastIndex = -1;
-    try {
-      if (ev && ev.pointerId !== undefined) grid.releasePointerCapture(ev.pointerId);
-    } catch (_) {}
     if (dirty) {
       saveZoneMaskToStorage(zoneMaskMonitor);
       sendMotionConfigToCamera();
@@ -1213,14 +1200,72 @@ function wireZonesDrag(grid) {
     dirty = false;
   };
 
-  grid.addEventListener('pointerup', endGesture);
-  grid.addEventListener('pointercancel', endGesture);
-  grid.addEventListener('pointerleave', (ev) => {
-    // Don't end on pointerleave — setPointerCapture should keep us alive.
-    // But if the pointer was never captured (desktop mouse out of window),
-    // end cleanly.
-    if (painting && ev.pointerType === 'mouse' && ev.buttons === 0) endGesture(ev);
+  // ---- Pointer Events (desktop, modern mobile) ----
+  const onPointerMove = (ev) => {
+    if (!active || source !== 'pointer') return;
+    if (pointerId !== null && ev.pointerId !== pointerId) return;
+    const cell = cellFromPoint(ev.clientX, ev.clientY);
+    if (cell) applyCell(cell);
+    ev.preventDefault();
+  };
+  const onPointerEnd = (ev) => {
+    if (!active || source !== 'pointer') return;
+    if (pointerId !== null && ev.pointerId !== pointerId) return;
+    document.removeEventListener('pointermove', onPointerMove);
+    document.removeEventListener('pointerup', onPointerEnd);
+    document.removeEventListener('pointercancel', onPointerEnd);
+    endGesture();
+  };
+
+  grid.addEventListener('pointerdown', (ev) => {
+    if (active) return;                         // already painting via touch
+    if (ev.pointerType === 'touch') return;      // let the touch handlers own it
+    if (ev.button !== undefined && ev.button !== 0) return;
+
+    const cell = cellFromPoint(ev.clientX, ev.clientY);
+    if (!cell) return;
+    if (!startGesture(cell)) return;
+
+    source = 'pointer';
+    pointerId = ev.pointerId;
+    document.addEventListener('pointermove', onPointerMove, { passive: false });
+    document.addEventListener('pointerup', onPointerEnd);
+    document.addEventListener('pointercancel', onPointerEnd);
+    ev.preventDefault();
   });
+
+  // ---- Touch Events (iOS Safari primary path) ----
+  const onTouchMove = (ev) => {
+    if (!active || source !== 'touch') return;
+    const t = ev.touches && ev.touches[0];
+    if (!t) return;
+    const cell = cellFromPoint(t.clientX, t.clientY);
+    if (cell) applyCell(cell);
+    // Prevent scroll/zoom while painting.
+    if (ev.cancelable) ev.preventDefault();
+  };
+  const onTouchEnd = () => {
+    if (!active || source !== 'touch') return;
+    document.removeEventListener('touchmove', onTouchMove);
+    document.removeEventListener('touchend', onTouchEnd);
+    document.removeEventListener('touchcancel', onTouchEnd);
+    endGesture();
+  };
+
+  grid.addEventListener('touchstart', (ev) => {
+    if (active) return;
+    const t = ev.touches && ev.touches[0];
+    if (!t) return;
+    const cell = cellFromPoint(t.clientX, t.clientY);
+    if (!cell) return;
+    if (!startGesture(cell)) return;
+
+    source = 'touch';
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', onTouchEnd);
+    document.addEventListener('touchcancel', onTouchEnd);
+    if (ev.cancelable) ev.preventDefault();
+  }, { passive: false });
 }
 
 function onMotionToggle(enabled) {
