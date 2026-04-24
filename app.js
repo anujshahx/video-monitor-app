@@ -441,17 +441,17 @@ async function enumerateCamerasClassified() {
 // =========================================================
 async function startCamera() {
   try {
-    // Intentionally NO `aspectRatio` constraint. iPhone sensors are
-    // natively 4:3; forcing 9:16 here makes iOS crop ~25% of the horizontal
-    // FOV from whichever lens it picks, which defeats the point of having
-    // a wide-angle lens at all. Let iOS hand us the native sensor frame —
-    // the monitor side letterboxes it with `object-fit: contain`.
+    // Intentionally NO `aspectRatio` constraint and NO square height. iPhone
+    // and iPad sensors are natively 4:3; forcing 9:16 or a square here makes
+    // iOS crop ~25% of the horizontal FOV (or, on older iPads like the Pro
+    // 9.7 on iOS 15, occasionally deliver a pipeline the receiver can't
+    // decode). Let iOS hand us the native sensor frame — the monitor side
+    // fills with `object-fit: cover`.
     const baseConstraints = {
       video: {
         facingMode: { ideal: 'environment' },
         width:  { ideal: 1280 },
-        height: { ideal: 1280 },
-        frameRate: { ideal: 24, max: 30 }
+        frameRate: { ideal: 30, max: 30 }
       },
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
     };
@@ -996,9 +996,37 @@ async function createAnswerFromOffer(offer, roomCode) {
     };
 
     pc.ontrack = (e) => {
+      log('Monitor ontrack', {
+        kind: e.track.kind,
+        readyState: e.track.readyState,
+        muted: e.track.muted,
+        streamTracks: (e.streams[0] && e.streams[0].getTracks().length) || 0
+      });
       if (e.track.kind === 'video') {
         const vid = document.getElementById('monitorVideo');
-        if (vid) vid.srcObject = e.streams[0];
+        if (vid) {
+          vid.srcObject = e.streams[0];
+          // iOS Safari doesn't always auto-play a WebRTC stream that
+          // arrives slightly after the user gesture — especially when the
+          // camera peer is running an older iOS (e.g. iPad Pro 9.7 on
+          // iOS 15). Explicitly nudge playback and surface any failure
+          // via logging so we can see silent autoplay blocks.
+          const tryPlay = () => {
+            const p = vid.play();
+            if (p && typeof p.catch === 'function') {
+              p.catch(err => log('Monitor video play rejected', err && err.name, err && err.message));
+            }
+          };
+          tryPlay();
+          // Also retry once metadata has loaded — some iOS builds only
+          // accept play() after loadedmetadata fires.
+          vid.onloadedmetadata = () => {
+            log('Monitor video loadedmetadata', { w: vid.videoWidth, h: vid.videoHeight });
+            tryPlay();
+          };
+          vid.onplaying = () => log('Monitor video onplaying', { w: vid.videoWidth, h: vid.videoHeight });
+          vid.onerror   = () => log('Monitor video onerror',   vid.error && vid.error.code);
+        }
         hideLiveOverlay();
         // Begin polling as soon as media starts flowing. This is the most
         // reliable trigger on iOS Safari.
