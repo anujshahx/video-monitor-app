@@ -1125,23 +1125,102 @@ function renderZoneGrid() {
     // highlighted (selected). Unselected cells are transparent.
     cell.className = 'zone-cell' + (mask[i] ? ' selected' : '');
     cell.setAttribute('data-index', String(i));
-    cell.addEventListener('click', () => toggleZoneCell(i));
     grid.appendChild(cell);
   }
+  wireZonesDrag(grid);
 }
 
-function toggleZoneCell(i) {
-  const mask = ensureMonitorZoneMask();
-  mask[i] = !mask[i];
-  zoneMaskMonitor = mask;
-  saveZoneMaskToStorage(mask);
+// Tap + drag-to-paint on the zones grid. The first cell the pointer lands on
+// defines the paint direction (select if it was empty, deselect if it was
+// selected). All subsequent cells the pointer enters are set to that same
+// state, so a single gesture can quickly rubber-stamp a row/column.
+//
+// We keep paint state local to this closure and attach handlers once per grid
+// element (guarded by _bmDragWired) so repeated renderZoneGrid() calls don't
+// stack listeners.
+function wireZonesDrag(grid) {
+  if (!grid || grid._bmDragWired) return;
+  grid._bmDragWired = true;
 
-  const grid = document.getElementById('zoneGrid');
-  if (grid && grid.children[i]) {
-    grid.children[i].classList.toggle('selected', mask[i]);
-  }
-  // Push latest config to the camera immediately (silent no-op if DC closed).
-  sendMotionConfigToCamera();
+  let painting = false;
+  let paintOn = false;       // the value we're stamping onto cells this gesture
+  let lastIndex = -1;        // cell we most recently touched (dedupe)
+  let dirty = false;         // did this gesture change anything?
+
+  const cellFromPoint = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return null;
+    const cell = el.closest('.zone-cell');
+    if (!cell || cell.parentElement !== grid) return null;
+    return cell;
+  };
+
+  const applyCell = (cell) => {
+    if (!cell) return;
+    const idx = parseInt(cell.getAttribute('data-index'), 10);
+    if (!Number.isFinite(idx) || idx < 0 || idx >= ZONE_TOTAL) return;
+    if (idx === lastIndex) return;
+    lastIndex = idx;
+
+    const mask = ensureMonitorZoneMask();
+    if (mask[idx] === paintOn) return;
+    mask[idx] = paintOn;
+    zoneMaskMonitor = mask;
+    cell.classList.toggle('selected', paintOn);
+    dirty = true;
+  };
+
+  grid.addEventListener('pointerdown', (ev) => {
+    // Only primary pointer (ignore multi-touch)
+    if (ev.button !== undefined && ev.button !== 0) return;
+
+    const cell = cellFromPoint(ev.clientX, ev.clientY);
+    if (!cell) return;
+
+    const idx = parseInt(cell.getAttribute('data-index'), 10);
+    if (!Number.isFinite(idx)) return;
+
+    const mask = ensureMonitorZoneMask();
+    // Paint the opposite of the starting cell's current state.
+    paintOn = !mask[idx];
+    painting = true;
+    lastIndex = -1;
+    dirty = false;
+
+    try { grid.setPointerCapture(ev.pointerId); } catch (_) {}
+    applyCell(cell);
+
+    ev.preventDefault();
+  });
+
+  grid.addEventListener('pointermove', (ev) => {
+    if (!painting) return;
+    const cell = cellFromPoint(ev.clientX, ev.clientY);
+    if (cell) applyCell(cell);
+  });
+
+  const endGesture = (ev) => {
+    if (!painting) return;
+    painting = false;
+    lastIndex = -1;
+    try {
+      if (ev && ev.pointerId !== undefined) grid.releasePointerCapture(ev.pointerId);
+    } catch (_) {}
+    if (dirty) {
+      saveZoneMaskToStorage(zoneMaskMonitor);
+      sendMotionConfigToCamera();
+    }
+    dirty = false;
+  };
+
+  grid.addEventListener('pointerup', endGesture);
+  grid.addEventListener('pointercancel', endGesture);
+  grid.addEventListener('pointerleave', (ev) => {
+    // Don't end on pointerleave — setPointerCapture should keep us alive.
+    // But if the pointer was never captured (desktop mouse out of window),
+    // end cleanly.
+    if (painting && ev.pointerType === 'mouse' && ev.buttons === 0) endGesture(ev);
+  });
 }
 
 function onMotionToggle(enabled) {
